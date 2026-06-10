@@ -162,6 +162,15 @@ async def _handle_hook(app: FastAPI, name: str, request: Request, session_id: st
     if perr:
         return JSONResponse({"error": perr}, status_code=422)
 
+    # Validate the per-job repo selection against the declared pool (§2).
+    if "repos" in payload:
+        from .instances import InstanceError
+
+        try:
+            inst.select_repos(payload.get("repos"))
+        except InstanceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
     # Session: explicit id, or find-or-create by thread_key.
     sess = None
     thread_key = payload.get("thread_key")

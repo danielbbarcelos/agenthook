@@ -24,11 +24,31 @@ class InstanceError(Exception):
     pass
 
 
+def _derive_repo_name(url: str) -> str:
+    """A logical, filesystem-safe name from a git URL's last path segment."""
+    tail = url.rstrip("/").split("/")[-1]
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    tail = re.sub(r"[^a-z0-9_-]+", "-", tail.lower()).strip("-")
+    return tail or "repo"
+
+
+@dataclass
+class RepoRef:
+    """A single repository a job may check out (DESIGN.md §2). Multi-checkout:
+    an instance declares a *pool* of these; each job selects 0..N of them."""
+
+    name: str
+    url: str
+    branch_base: str = "main"
+
+
 @dataclass
 class Instance:
     name: str
     engine: str = "claude"
-    repo: str | None = None
+    repo: str | None = None  # legacy single-repo (still honored); prefer `repos`
+    repos: list[dict[str, Any]] = field(default_factory=list)  # pool: {name,url,branch_base?}
     branch_base: str = "main"
     engine_auth: str = "api-key"  # api-key | subscription
     webhook_auth: dict[str, Any] = field(default_factory=dict)  # §12
@@ -66,10 +86,64 @@ class Instance:
         mode = self.limits.get("mode")
         if mode and mode not in {m.value for m in Mode}:
             raise InstanceError(f"unknown default mode {mode!r}")
+        seen: set[str] = set()
+        for r in self.repos:
+            if not r.get("url"):
+                raise InstanceError(f"repo entry missing 'url': {r!r}")
+            rname = r.get("name") or _derive_repo_name(r["url"])
+            if not _NAME_RE.match(rname):
+                raise InstanceError(f"invalid repo name {rname!r}")
+            if rname in seen:
+                raise InstanceError(f"duplicate repo name {rname!r}")
+            seen.add(rname)
 
     @property
     def default_mode(self) -> str:
         return self.limits.get("mode", "default")
+
+    # ---- repo pool (DESIGN.md §2 — multi-checkout) -----------------------
+
+    def resolved_repos(self) -> list["RepoRef"]:
+        """The full declared pool as :class:`RepoRef`, normalizing the legacy
+        single ``repo`` field when ``repos`` is empty."""
+        if self.repos:
+            return [
+                RepoRef(
+                    name=r.get("name") or _derive_repo_name(r["url"]),
+                    url=r["url"],
+                    branch_base=r.get("branch_base") or self.branch_base,
+                )
+                for r in self.repos
+            ]
+        if self.repo:
+            return [RepoRef(_derive_repo_name(self.repo), self.repo, self.branch_base)]
+        return []
+
+    def repo_names(self) -> list[str]:
+        return [r.name for r in self.resolved_repos()]
+
+    def select_repos(self, names: list[str] | None) -> list["RepoRef"]:
+        """Resolve a per-job selection against the declared pool.
+
+        ``None`` (key absent) -> all declared repos; ``[]`` -> none (0 repos);
+        a list -> that subset. Unknown names raise (the job can only reach
+        pre-authorized repos)."""
+        pool = self.resolved_repos()
+        if names is None:
+            return pool
+        if not isinstance(names, list):
+            raise InstanceError("'repos' selection must be a list of repo names")
+        by_name = {r.name: r for r in pool}
+        out: list[RepoRef] = []
+        for n in names:
+            ref = by_name.get(n)
+            if ref is None:
+                raise InstanceError(
+                    f"repo {n!r} is not declared on instance {self.name!r} "
+                    f"(available: {', '.join(by_name) or 'none'})"
+                )
+            out.append(ref)
+        return out
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items()}

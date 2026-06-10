@@ -38,3 +38,19 @@ instances:
         cron: "0 3 * * 1"
         deliverable: pr
         prompt: "Update safe dependencies and open a PR."
+
+  # 3) Cross-repo instance: a ticket may touch the frontend, the API, or both.
+  #    The instance declares the *pool*; each webhook chooses which repos to
+  #    check out side by side via a "repos" list (omit = all, [] = none).
+  #      POST /hook/fullstack {"prompt": "...", "repos": ["api"]}
+  #    Repos are checked out together; if the job changes code, each changed
+  #    repo gets its own branch/PR.
+  fullstack:
+    engine: claude
+    deliverable: analysis        # default; raise to pr per-request if allowed
+    allow_overrides: [deliverable, mode]
+    repos:
+      - { name: api, url: "git@github.com:me/api.git" }
+      - { name: web, url: "git@github.com:me/web.git", branch_base: develop }
+    webhook_auth: { schemes: [bearer] }
+    on_result: [logs, callback]

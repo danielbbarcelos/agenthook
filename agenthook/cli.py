@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -24,11 +24,13 @@ from .models import Deliverable, Job, Mode
 
 app = typer.Typer(help="agenthook — run agentic coding CLIs via webhooks", no_args_is_help=False)
 instance_app = typer.Typer(help="Manage instances")
+repo_app = typer.Typer(help="Manage an instance's repo pool")
 env_app = typer.Typer(help="Manage encrypted env vars")
 jobs_app = typer.Typer(help="Inspect jobs")
 sessions_app = typer.Typer(help="Inspect sessions")
 service_app = typer.Typer(help="Control the systemd daemon")
 app.add_typer(instance_app, name="instance")
+instance_app.add_typer(repo_app, name="repo")
 app.add_typer(env_app, name="env")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(sessions_app, name="sessions")
@@ -42,13 +44,37 @@ def _err(msg: str) -> None:
     raise typer.Exit(1)
 
 
+def _parse_repo_sel(value: Optional[str]) -> Optional[list]:
+    """Parse a per-job repo *selection*: ``None`` -> all, ``''`` -> none ([]),
+    ``'a,b'`` -> subset."""
+    if value is None:
+        return None
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def _parse_repos(specs: Optional[List[str]]) -> list[dict]:
+    """Parse repeated --repo values (``URL`` or ``name=URL``) into pool entries."""
+    from .instances import _derive_repo_name
+
+    repos: list[dict] = []
+    for spec in specs or []:
+        if "=" in spec:
+            rname, url = spec.split("=", 1)
+            repos.append({"name": rname.strip(), "url": url.strip()})
+        else:
+            repos.append({"name": _derive_repo_name(spec), "url": spec.strip()})
+    return repos
+
+
 # --- instance ---------------------------------------------------------------
 
 
 @instance_app.command("add")
 def instance_add(
     name: str,
-    repo: Optional[str] = typer.Option(None, "--repo"),
+    repo: Optional[List[str]] = typer.Option(
+        None, "--repo", help="repeatable; URL or name=URL. Multiple repos are checked out side by side."
+    ),
     engine: str = typer.Option("claude", "--engine"),
     engine_auth: str = typer.Option("api-key", "--engine-auth"),
     deliverable: str = typer.Option("analysis", "--deliverable"),
@@ -61,10 +87,11 @@ def instance_add(
     """Create an instance and generate its (immutable) encryption key."""
     if instances.exists(name):
         _err(f"instance {name!r} already exists")
+    repos = _parse_repos(repo)
     inst = Instance(
         name=name,
         engine=engine,
-        repo=repo,
+        repos=repos,
         engine_auth=engine_auth,
         deliverable=deliverable,
         model=model,
@@ -90,10 +117,12 @@ def instance_add(
 
 @instance_app.command("list")
 def instance_list():
-    table = Table("name", "engine", "deliverable", "repo", "paused")
+    table = Table("name", "engine", "deliverable", "repos", "paused")
     for inst in instances.list_all():
+        names = inst.repo_names()
+        repos = ", ".join(names) if names else "-"
         table.add_row(
-            inst.name, inst.engine, inst.deliverable, inst.repo or "-",
+            inst.name, inst.engine, inst.deliverable, repos,
             "[red]yes[/]" if inst.paused else "no",
         )
     console.print(table)
@@ -119,6 +148,49 @@ def instance_resume(name: str):
     """Reactivate an instance paused by the circuit breaker (§17)."""
     instances.set_paused(name, False)
     console.print(f"[green]resumed[/] {name}")
+
+
+@repo_app.command("add")
+def repo_add(
+    name: str,
+    spec: str = typer.Argument(..., help="URL or name=URL"),
+    branch: Optional[str] = typer.Option(None, "--branch", help="base branch for this repo"),
+):
+    """Add a repository to an instance's pool."""
+    inst = _load(name)
+    entry = _parse_repos([spec])[0]
+    if branch:
+        entry["branch_base"] = branch
+    if entry["name"] in inst.repo_names():
+        _err(f"repo {entry['name']!r} already in pool")
+    if inst.repo and not inst.repos:  # migrate legacy single repo into the pool
+        inst.repos = [{"name": instances._derive_repo_name(inst.repo), "url": inst.repo}]
+        inst.repo = None
+    inst.repos.append(entry)
+    instances.save(inst)
+    console.print(f"added repo [cyan]{entry['name']}[/] to {name}")
+
+
+@repo_app.command("rm")
+def repo_rm(name: str, repo: str):
+    """Remove a repository from an instance's pool by name."""
+    inst = _load(name)
+    before = len(inst.repos)
+    inst.repos = [r for r in inst.repos if (r.get("name") or instances._derive_repo_name(r["url"])) != repo]
+    if len(inst.repos) == before:
+        _err(f"repo {repo!r} not in pool of {name!r}")
+    instances.save(inst)
+    console.print(f"removed repo {repo!r} from {name}")
+
+
+@repo_app.command("list")
+def repo_list(name: str):
+    """List the repositories in an instance's pool."""
+    inst = _load(name)
+    table = Table("name", "url", "branch_base")
+    for r in inst.resolved_repos():
+        table.add_row(r.name, r.url, r.branch_base)
+    console.print(table)
 
 
 # --- env --------------------------------------------------------------------
@@ -334,13 +406,16 @@ def run_cmd(
     deliverable: Optional[str] = typer.Option(None, "--deliverable"),
     mode: Optional[str] = typer.Option(None, "--mode"),
     thread_key: Optional[str] = typer.Option(None, "--thread-key"),
+    repos: Optional[str] = typer.Option(
+        None, "--repos", help="comma list of repo names to use (omit=all, ''=none)"
+    ),
 ):
     """Run a job locally (synchronous), bypassing the webhook (§4, P1)."""
     from . import runner
 
     inst = _load(name)
     store.init_db()
-    job = _build_job(inst, prompt, deliverable, mode, thread_key)
+    job = _build_job(inst, prompt, deliverable, mode, thread_key, repos=_parse_repo_sel(repos))
     store.create_job(job)
     console.print(f"running {job.id} …")
     job = runner.run_job(job, log_cb=lambda m: console.print(f"[dim]{m}[/]"))
@@ -354,13 +429,20 @@ def dry_run_cmd(
     deliverable: Optional[str] = typer.Option(None, "--deliverable"),
     mode: Optional[str] = typer.Option(None, "--mode"),
     request_type: Optional[str] = typer.Option(None, "--request-type"),
+    repos: Optional[str] = typer.Option(
+        None, "--repos", help="comma list of repo names to use (omit=all, ''=none)"
+    ),
 ):
     """Render prompt/argv/env/MCP without executing anything (§32)."""
     from . import runner
 
     inst = _load(name)
-    job = _build_job(inst, prompt, deliverable, mode, None, request_type)
+    job = _build_job(inst, prompt, deliverable, mode, None, request_type, repos=_parse_repo_sel(repos))
     out = runner.dry_run(job)
+    if out.get("repos") is not None:
+        rl = out["repos"]
+        summary = ", ".join(f"{r['name']} ({r['branch_base']})" for r in rl) if rl else "none"
+        console.print(Panel(f"{summary}\nlayout: {out['workspace_layout']}", title="repos", border_style="magenta"))
     console.print(Panel(out["prompt"], title="prompt", border_style="cyan"))
     if out["context_file"]["body"]:
         console.print(Panel(out["context_file"]["body"], title=out["context_file"]["name"]))
@@ -381,6 +463,9 @@ def send_cmd(
     token: Optional[str] = typer.Option(None, "--token"),
     thread_key: Optional[str] = typer.Option(None, "--thread-key"),
     deliverable: Optional[str] = typer.Option(None, "--deliverable"),
+    repos: Optional[str] = typer.Option(
+        None, "--repos", help="comma list of repo names to use (omit=all, ''=none)"
+    ),
     wait: bool = typer.Option(False, "--wait"),
     replay: Optional[str] = typer.Option(None, "--replay", help="resend a past job's request"),
 ):
@@ -400,6 +485,9 @@ def send_cmd(
             payload["thread_key"] = thread_key
         if deliverable:
             payload["deliverable"] = deliverable
+        sel = _parse_repo_sel(repos)
+        if sel is not None:
+            payload["repos"] = sel
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -536,12 +624,14 @@ def _load(name: str) -> Instance:
         _err(str(exc))
 
 
-def _build_job(inst, prompt, deliverable, mode, thread_key, request_type=None) -> Job:
+def _build_job(inst, prompt, deliverable, mode, thread_key, request_type=None, repos=None) -> Job:
     request = {"prompt": prompt or ""} if prompt else {}
     if request_type:
         request["request_type"] = request_type
     if thread_key:
         request["thread_key"] = thread_key
+    if repos is not None:
+        request["repos"] = repos
     sess = store.find_or_create_session(inst.name, thread_key) if thread_key else None
     return Job(
         instance=inst.name,

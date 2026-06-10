@@ -1,8 +1,10 @@
 """Git worktree / branch / commit / push / PR helpers (DESIGN.md §22).
 
-A per-instance mirror clone lives in ``~/.agenthook/repos/<instance>`` and is
+A per-repo mirror clone lives in ``~/.agenthook/repos/<instance>/<repo>`` and is
 kept fresh with ``git fetch``. Each job gets its own ``git worktree`` so runs
-never collide on the working tree. PRs are opened via the ``gh`` CLI.
+never collide on the working tree. When a job uses several repos they are
+checked out side by side under the job's workspace. PRs are opened via the
+``gh`` CLI, one per repository that actually changed.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from pathlib import Path
 from typing import Mapping
 
 from . import paths
-from .instances import Instance
+from .instances import Instance, RepoRef
 
 
 class GitError(Exception):
@@ -32,29 +34,39 @@ def _run(args: list[str], cwd: str | Path | None = None, env: Mapping[str, str] 
     return proc.stdout.strip()
 
 
-def ensure_mirror(inst: Instance, env: Mapping[str, str] | None = None) -> Path:
-    if not inst.repo:
-        raise GitError(f"instance {inst.name!r} has no repo configured")
-    path = paths.repos_dir() / inst.name
+def mirror_path(inst: Instance, repo: RepoRef) -> Path:
+    return paths.repos_dir() / inst.name / repo.name
+
+
+def ensure_mirror(inst: Instance, repo: RepoRef, env: Mapping[str, str] | None = None) -> Path:
+    path = mirror_path(inst, repo)
     if not (path / ".git").exists():
-        _run(["git", "clone", inst.repo, str(path)], env=env)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _run(["git", "clone", repo.url, str(path)], env=env)
     else:
         _run(["git", "fetch", "--all", "--prune"], cwd=path, env=env)
     return path
 
 
-def create_worktree(inst: Instance, job_id: str, base: str | None = None) -> Path:
-    mirror = ensure_mirror(inst)
-    base = base or inst.branch_base
-    wt = paths.work_dir() / job_id
-    if wt.exists():
-        remove_worktree(inst, wt)
-    _run(["git", "worktree", "add", "--force", "--detach", str(wt), f"origin/{base}"], cwd=mirror)
-    return wt
+def create_worktree(
+    inst: Instance,
+    repo: RepoRef,
+    dest: str | Path,
+    base: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    mirror = ensure_mirror(inst, repo, env)
+    base = base or repo.branch_base
+    dest = Path(dest)
+    if dest.exists():
+        remove_worktree(inst, repo, dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run(["git", "worktree", "add", "--force", "--detach", str(dest), f"origin/{base}"], cwd=mirror)
+    return dest
 
 
-def remove_worktree(inst: Instance, wt: str | Path) -> None:
-    mirror = paths.repos_dir() / inst.name
+def remove_worktree(inst: Instance, repo: RepoRef, wt: str | Path) -> None:
+    mirror = mirror_path(inst, repo)
     try:
         _run(["git", "worktree", "remove", "--force", str(wt)], cwd=mirror)
     except GitError:

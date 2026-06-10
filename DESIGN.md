@@ -41,7 +41,8 @@ Campos:
 |-------|-----------|
 | `name` | Identificador único (slug). Usado na rota do webhook. |
 | `engine` | Adapter do agente: `claude` (default) \| `codex` \| `gemini` \| `aider` \| … (ver §16). |
-| `repo` | **Opcional.** URL git (ssh/https) ou caminho local. Em `analysis`/`action` pode ser só contexto read-only — ou ausente (tarefa pura via env, ver §20). |
+| `repo` | **Legado/opcional.** URL git (ssh/https) ou caminho local, um único repo. Mantido por compatibilidade; prefira `repos`. |
+| `repos` | **Opcional. Pool de 0..N repositórios** que a instância conhece: lista de `{name, url, branch_base?}`. Cada job seleciona um subconjunto via `repos` no payload (omitido = todos, `[]` = nenhum). Os repos selecionados são clonados **lado a lado** no mesmo workspace (multi-checkout) — o agente lê/cruza todos; se mutar código, **cada repo alterado gera seu próprio branch/PR**. Em `analysis`/`action` os repos são contexto read-only; sem repos = tarefa pura via env (ver §20). |
 | `deliverable` | Tipo de saída default: `analysis` \| `action` \| `patch` \| `commit` \| `pr` (ver §20). |
 | `branch_base` | Branch base para checkout (default `main`). |
 | `engine_auth` | Auth do **engine** com o provedor de IA: `api-key` \| `subscription` (§5). |
@@ -115,8 +116,8 @@ agenthook/
 │       ├── instance.yaml        # config da instância (campos da §2)
 │       ├── instance.key         # chave de criptografia imutável (auto-decrypt)
 │       └── env.enc              # variáveis de ambiente cifradas
-├── repos/<instance>/            # clone "espelho" do repo (atualizado por fetch)
-├── work/<job_id>/               # worktree efêmero do job (+ .agenthook/attachments/, §30)
+├── repos/<instance>/<repo>/     # clone "espelho" por repo do pool (atualizado por fetch)
+├── work/<job_id>/               # workspace efêmero do job; em multi-repo cada repo vira <job_id>/<repo>/ (+ .agenthook/attachments/, §30)
 ├── sessions/<session_id>/       # volume persistente de sessão do engine (§29) — ~/.claude etc.
 └── logs/<instance>/<job_id>.log
 ```
@@ -154,8 +155,9 @@ results.py → normaliza saída/erro (§16/§17) → grava log, uso/custo (§24)
 
 ```bash
 # --- instâncias ---
-agenthook instance add <name> [--repo <url>] [--branch main] [--engine claude|codex|...]
+agenthook instance add <name> [--repo <url|name=url> ...] [--branch main] [--engine claude|codex|...]
      [--engine-auth api-key|subscription] [--deliverable analysis|action|patch|commit|pr]
+agenthook instance repo add|rm|list <name> [<name=url>] [--branch <base>]   # gerencia o pool (§2)
      [--model ...] [--on-result logs,output,callback,notify]
      [--callback-url ...] [--pr-branch "agenthook/job-{id}"]
 # → ao criar, GERA e EXIBE UMA ÚNICA VEZ a chave de criptografia da instância.

@@ -35,7 +35,9 @@ class RunContext:
     engine: Engine
     env_all: dict[str, str]
     env_nonsecret: dict[str, str]
-    wt: Path | None = None
+    wt: Path | None = None  # workspace root the engine runs in
+    repos: list = field(default_factory=list)  # selected RepoRef pool for this job
+    repo_dirs: dict = field(default_factory=dict)  # repo name -> checkout path
     session_home: Path | None = None
     prompt: str = ""
     log_path: Path | None = None
@@ -113,11 +115,21 @@ def dry_run(job: Job) -> dict:
     prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
     spec = _build_runspec(inst, engine, job, prompt, resume_id=None, sandbox=inst is not None)
     masked = {k: secrets.obfuscate(v) for k, v in env_all.items()}
+    try:
+        selected = inst.select_repos(job.request.get("repos"))
+        repos_info = [
+            {"name": r.name, "url": r.url, "branch_base": _base_for(job, r)} for r in selected
+        ]
+        layout = "none" if not selected else ("single-root" if len(selected) == 1 else "multi-checkout")
+    except Exception as exc:  # noqa: BLE001
+        repos_info, layout = [], f"error: {exc}"
     return {
         "instance": inst.name,
         "engine": engine.name,
         "deliverable": job.deliverable.value,
         "mode": job.mode.value,
+        "repos": repos_info,
+        "workspace_layout": layout,
         "prompt": prompt,
         "context_file": {
             "name": engine.context_filename,
@@ -140,12 +152,32 @@ def _prepare_workspace(ctx: RunContext) -> None:
     ctx.prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
     job.prompt = ctx.prompt
 
-    if inst.repo:
-        ctx.wt = git_ops.create_worktree(inst, job.id, job.request.get("branch_base"))
-    else:
+    from . import paths
+
+    ctx.repos = inst.select_repos(job.request.get("repos"))
+    job_root = paths.work_dir() / job.id
+    git_env = _process_env(ctx)
+    if not ctx.repos:
+        # No repo: a plain scratch workspace (analysis/action without code).
         ctx.wt = _empty_workdir(job.id)
+    elif len(ctx.repos) == 1:
+        # Single repo keeps the historical layout: the checkout *is* the root,
+        # so context files and cwd land at the repo root.
+        r = ctx.repos[0]
+        ctx.wt = git_ops.create_worktree(inst, r, job_root, _base_for(job, r), env=git_env)
+        ctx.repo_dirs[r.name] = ctx.wt
+    else:
+        # Multi-checkout: each repo side by side under the job workspace root.
+        job_root.mkdir(parents=True, exist_ok=True)
+        ctx.wt = job_root
+        for r in ctx.repos:
+            sub = job_root / r.name
+            git_ops.create_worktree(inst, r, sub, _base_for(job, r), env=git_env)
+            ctx.repo_dirs[r.name] = sub
     job.workdir = str(ctx.wt)
-    ctx.log(f"workspace: {ctx.wt}")
+    if ctx.repo_dirs:
+        job.metadata["repos"] = list(ctx.repo_dirs)
+    ctx.log(f"workspace: {ctx.wt} ({len(ctx.repos)} repo(s))")
 
     # Context file (CLAUDE.md / AGENTS.md / …).
     body = templating.render_context_file(inst, context)
@@ -377,36 +409,61 @@ def _process_env(ctx: RunContext) -> dict[str, str]:
 
 
 def _apply_deliverable(ctx: RunContext) -> None:
+    """Apply the deliverable per repository — only those that actually changed
+    get a patch/commit/PR. Repos are independent GitHub remotes, so a multi-repo
+    job produces one branch/PR per changed repo (DESIGN.md §2, §20)."""
     job, inst = ctx.job, ctx.inst
     d = job.deliverable
-    if d.read_only or not ctx.wt:
-        return
-    if not git_ops.has_changes(ctx.wt):
-        ctx.log("no changes produced by the agent")
+    if d.read_only or not ctx.repos:
         return
 
     branch = inst.pr_branch.format(id=job.id)
-    base = job.request.get("branch_base") or inst.branch_base
     msg = _commit_message(job)
+    body = job.result.text if job.result else ""
+    env = _process_env(ctx)
 
-    if d is Deliverable.PATCH:
-        diff = git_ops.diff(ctx.wt)
-        patch_path = ctx.wt / "changes.diff"
-        patch_path.write_text(diff)
-        job.metadata["patch"] = str(patch_path)
-        ctx.log(f"patch written: {patch_path}")
-        return
+    patches: list[dict] = []
+    pr_urls: list[dict] = []
+    pushed: list[str] = []
 
-    git_ops.commit_branch(ctx.wt, branch, msg)
-    git_ops.push(ctx.wt, branch, env=_process_env(ctx))
-    ctx.log(f"pushed branch {branch}")
-    if d is Deliverable.PR:
-        url = git_ops.open_pr(
-            ctx.wt, base=base, title=_pr_title(job), body=job.result.text if job.result else "",
-            env=_process_env(ctx),
-        )
-        job.pr_url = url.strip().splitlines()[-1] if url else None
-        ctx.log(f"opened PR: {job.pr_url}")
+    for repo in ctx.repos:
+        wt = ctx.repo_dirs.get(repo.name)
+        if not wt or not git_ops.has_changes(wt):
+            continue
+        base = _base_for(job, repo)
+
+        if d is Deliverable.PATCH:
+            patch_path = wt / "changes.diff"
+            patch_path.write_text(git_ops.diff(wt))
+            patches.append({"repo": repo.name, "path": str(patch_path)})
+            ctx.log(f"[{repo.name}] patch written: {patch_path}")
+            continue
+
+        git_ops.commit_branch(wt, branch, msg)
+        git_ops.push(wt, branch, env=env)
+        pushed.append(repo.name)
+        ctx.log(f"[{repo.name}] pushed branch {branch}")
+        if d is Deliverable.PR:
+            url = git_ops.open_pr(wt, base=base, title=_pr_title(job), body=body, env=env)
+            url = url.strip().splitlines()[-1] if url else None
+            pr_urls.append({"repo": repo.name, "url": url})
+            ctx.log(f"[{repo.name}] opened PR: {url}")
+
+    if patches:
+        job.metadata["patches"] = patches
+        job.metadata["patch"] = patches[0]["path"]  # back-compat (single repo)
+    if pushed:
+        job.metadata["pushed_repos"] = pushed
+    if pr_urls:
+        job.metadata["pr_urls"] = pr_urls
+        job.pr_url = pr_urls[0]["url"]  # back-compat (single repo)
+    if d.mutates_code and not (patches or pushed):
+        ctx.log("no changes produced by the agent")
+
+
+def _base_for(job: Job, repo) -> str:
+    """A request-level ``branch_base`` overrides every repo's default base."""
+    return job.request.get("branch_base") or repo.branch_base
 
 
 def _commit_message(job: Job) -> str:
@@ -440,12 +497,22 @@ def _finalize(ctx: RunContext) -> None:
         output_full = (job.result.text if job.result else "")[:n]
     store.record_audit(job, prompt_full=prompt_full, output_full=output_full)
 
-    # Cleanup the ephemeral worktree (session volume is kept).
-    if ctx.wt and ctx.inst.repo and (ctx.wt.parent.name == "work"):
+    # Cleanup the ephemeral worktree(s) (session volume is kept).
+    for repo in ctx.repos:
+        wt = ctx.repo_dirs.get(repo.name)
+        if not wt:
+            continue
         try:
-            git_ops.remove_worktree(ctx.inst, ctx.wt)
+            git_ops.remove_worktree(ctx.inst, repo, wt)
         except Exception:  # noqa: BLE001
             pass
+    from . import paths
+
+    job_root = paths.work_dir() / job.id
+    if job_root.exists() and job_root.parent.name == "work":
+        import shutil
+
+        shutil.rmtree(job_root, ignore_errors=True)
 
     from .results import deliver_callbacks
 
