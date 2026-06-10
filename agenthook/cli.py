@@ -459,7 +459,7 @@ def login_cmd(name: str):
 
     inst = _load(name)
     console.print(
-        f"login isolado de [cyan]{name}[/] — faça /login e depois saia (/exit).\n"
+        f"isolated login for [cyan]{name}[/] — run /login, then exit (/exit).\n"
     )
     try:
         shell_mod.login(inst.name)

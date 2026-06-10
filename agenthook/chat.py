@@ -17,12 +17,12 @@ import uuid
 from . import instances, store
 from .models import Deliverable, Job, Mode
 
-_HELP = """[dim]comandos:
-  /help              esta ajuda
-  /new               recomeça a conversa (nova thread, perde o contexto)
-  /repos a,b         usa só esses repos do pool ('' = nenhum, /repos sem arg = todos)
-  /deliverable NAME  troca o deliverable (analysis, action, patch, commit, pr)
-  /exit  /quit       sair[/]"""
+_HELP = """[dim]commands:
+  /help              this help
+  /new               start over (new thread, drops the context)
+  /repos a,b         use only these pool repos ('' = none, /repos with no arg = all)
+  /deliverable NAME  switch the deliverable (analysis, action, patch, commit, pr)
+  /exit  /quit       leave[/]"""
 
 
 def _parse_repo_sel(value):
@@ -51,7 +51,7 @@ def repl(
     try:
         inst = instances.load(name)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]erro:[/] {exc}")
+        console.print(f"[red]error:[/] {exc}")
         return
     store.init_db()
 
@@ -61,22 +61,22 @@ def repl(
 
     pool = inst.repo_names()
     if sel is None:
-        shown_repos = ", ".join(pool) if pool else "nenhum"
+        shown_repos = ", ".join(pool) if pool else "none"
     elif sel == []:
-        shown_repos = "nenhum"
+        shown_repos = "none"
     else:
         shown_repos = ", ".join(sel)
 
     console.print(
-        f"[bold #b48ead]●[/] sessão [cyan]{name}[/] "
+        f"[bold #b48ead]●[/] session [cyan]{name}[/] "
         f"[dim](thread: {tk} · engine: {inst.engine}/{inst.engine_auth} · "
         f"deliverable: {deliv} · repos: {shown_repos})[/]"
     )
-    console.print("[dim]/help para comandos · /exit ou Ctrl+D para sair[/]\n")
+    console.print("[dim]/help for commands · /exit or Ctrl+D to leave[/]\n")
 
     while True:
         try:
-            line = console.input("[bold #b48ead]você ›[/] ").strip()
+            line = console.input("[bold #b48ead]you ›[/] ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -90,12 +90,12 @@ def repl(
             continue
         if line == "/new":
             tk = f"enter-{uuid.uuid4().hex[:8]}"
-            console.print(f"[dim]nova thread: {tk} (contexto reiniciado)[/]")
+            console.print(f"[dim]new thread: {tk} (context reset)[/]")
             continue
         if line.startswith("/repos"):
             arg = line[len("/repos"):].strip()
             sel = None if arg == "" else _parse_repo_sel(arg)
-            console.print(f"[dim]repos = {arg or 'todos'}[/]")
+            console.print(f"[dim]repos = {arg or 'all'}[/]")
             continue
         if line.startswith("/deliverable"):
             arg = line[len("/deliverable"):].strip()
@@ -103,15 +103,15 @@ def repl(
                 deliv = Deliverable(arg).value
                 console.print(f"[dim]deliverable = {deliv}[/]")
             except ValueError:
-                console.print(f"[red]deliverable inválido:[/] {arg}")
+                console.print(f"[red]invalid deliverable:[/] {arg}")
             continue
         if line.startswith("/"):
-            console.print(f"[red]comando desconhecido:[/] {line}  (/help)")
+            console.print(f"[red]unknown command:[/] {line}  (/help)")
             continue
 
         job = _build_job(inst, line, deliv, tk, sel)
         store.create_job(job)
-        with console.status("[dim]pensando…[/]", spinner="dots"):
+        with console.status("[dim]thinking…[/]", spinner="dots"):
             job = runner.run_job(job, log_cb=lambda _m: None)
 
         if job.result and job.result.text:
@@ -120,7 +120,7 @@ def repl(
             detail = job.error_message or job.status.value
             console.print(f"[yellow]claude ›[/] [dim]({job.status.value})[/] {detail}\n")
 
-    console.print("[dim]até logo.[/]")
+    console.print("[dim]bye.[/]")
 
 
 def _build_job(inst, prompt: str, deliverable: str, thread_key: str, repos) -> Job:

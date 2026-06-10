@@ -2,7 +2,7 @@
 
 Running ``agenthook`` with no subcommand drops into this menu: a hero banner
 (drawn once, on entry) + arrow-key navigation that stays alive until the user
-picks *sair* or presses Ctrl+C twice. The screen is cleared only when entering
+picks *quit* or presses Ctrl+C twice. The screen is cleared only when entering
 the menu; navigation just scrolls, so you keep the history of what you did.
 
 Every flow here also has a non-interactive CLI equivalent; the menu just makes
@@ -18,8 +18,8 @@ import sys
 from . import instances, secrets, store
 
 # Plain-text sentinels — no icons (keep navigation calm and readable).
-_BACK = "voltar"
-_QUIT = "sair"
+_BACK = "back"
+_QUIT = "quit"
 
 
 def _interactive() -> bool:
@@ -55,7 +55,7 @@ def _style():
 _MUTED = "fg:#6b7280"
 
 
-def _back_choice(label: str = "voltar"):
+def _back_choice(label: str = "back"):
     """A muted '←' back/quit entry, set apart from the real actions."""
     import questionary
 
@@ -123,7 +123,7 @@ def _banner(console) -> None:
         n_jobs = 0
 
     logo = ["●─╮", "│ │", "├─●", "│ │", "●─╯"]
-    meta = ["", "agenthook", f"v{_version()}", "runner de tarefas agênticas", ""]
+    meta = ["", "agenthook", f"v{_version()}", "agentic task runner", ""]
 
     body = Text()
     for i in range(5):
@@ -138,8 +138,8 @@ def _banner(console) -> None:
 
     console.print(Panel(body, border_style="#b48ead", padding=(1, 3), expand=False))
     console.print(
-        f"  [dim]{n_inst} instância(s) · {n_jobs} job(s)   ·   "
-        f"↑↓ navegar · Enter · Ctrl+C 2× p/ sair[/]",
+        f"  [dim]{n_inst} instance(s) · {n_jobs} job(s)   ·   "
+        f"↑↓ move · Enter · Ctrl+C 2× to quit[/]",
         highlight=False,
     )
     console.print()
@@ -148,7 +148,7 @@ def _banner(console) -> None:
 def _pause(console) -> None:
     import questionary
 
-    questionary.press_any_key_to_continue("  Enter para voltar…").ask()
+    questionary.press_any_key_to_continue("  Enter to go back…").ask()
     console.print()
 
 
@@ -175,28 +175,28 @@ def main_menu() -> None:
     interrupts = 0
     while True:
         choice = _select(
-            "O que deseja fazer?",
-            choices=["instâncias", "jobs", "sessões", _sep(), _back_choice(_QUIT)],
+            "What would you like to do?",
+            choices=["instances", "jobs", "sessions", _sep(), _back_choice(_QUIT)],
         )
         if choice is None:  # Ctrl+C on the top menu
             interrupts += 1
             if interrupts >= 2:
                 break
-            console.print("[dim]Ctrl+C de novo para sair, ou escolha uma opção.[/]")
+            console.print("[dim]Ctrl+C again to quit, or pick an option.[/]")
             continue
         interrupts = 0
         if choice == _QUIT:
             break
-        if choice == "instâncias":
+        if choice == "instances":
             _instances_menu(console)
         elif choice == "jobs":
             _show_jobs(console)
             _pause(console)
-        elif choice == "sessões":
+        elif choice == "sessions":
             _show_sessions(console)
             _pause(console)
 
-    console.print("até logo.")
+    console.print("bye.")
 
 
 # --- Instances submenu -------------------------------------------------------
@@ -205,60 +205,60 @@ def main_menu() -> None:
 def _instances_menu(console) -> None:
     while True:
         choice = _select(
-            "Instâncias — o que deseja?",
+            "Instances — what would you like?",
             choices=[
-                _sep("interagir"),
-                "conversar (chat)",
+                _sep("interact"),
+                "chat",
                 "shell (container)",
-                _sep("gerenciar"),
-                "adicionar",
-                "ver detalhes",
-                "editar",
-                "variáveis de ambiente",
-                _sep("listas / remover"),
-                "listar",
-                "excluir",
+                _sep("manage"),
+                "add",
+                "view",
+                "edit",
+                "env vars",
+                _sep("list / remove"),
+                "list",
+                "delete",
                 _sep(),
                 _back_choice(),
             ],
         )
         if choice is None or choice == _BACK:
             return
-        if choice == "conversar (chat)":
-            name = _pick_instance_or_none(console, "Conversar com qual instância?")
+        if choice == "chat":
+            name = _pick_instance_or_none(console, "Chat with which instance?")
             if name and name != _BACK:
                 from . import chat
 
                 chat.repl(name, console=console)
         elif choice == "shell (container)":
-            name = _pick_instance_or_none(console, "Abrir shell de qual instância?")
+            name = _pick_instance_or_none(console, "Open a shell for which instance?")
             if name and name != _BACK:
                 from . import shell as shell_mod
 
                 try:
                     shell_mod.shell(name)
                 except Exception as exc:  # noqa: BLE001
-                    console.print(f"[red]erro:[/] {exc}")
-        elif choice == "adicionar":
+                    console.print(f"[red]error:[/] {exc}")
+        elif choice == "add":
             _instance_add(console)
-        elif choice == "ver detalhes":
+        elif choice == "view":
             _instance_view(console)
-        elif choice == "editar":
+        elif choice == "edit":
             _instance_edit(console)
-        elif choice == "variáveis de ambiente":
-            name = _pick_instance_or_none(console, "Env de qual instância?")
+        elif choice == "env vars":
+            name = _pick_instance_or_none(console, "Env for which instance?")
             if name and name != _BACK:
                 _edit_env(console, name)
-        elif choice == "excluir":
+        elif choice == "delete":
             _instance_delete(console)
-        elif choice == "listar":
+        elif choice == "list":
             _show_instances(console)
 
 
-def _pick_instance_or_none(console, prompt: str = "Qual instância?"):
+def _pick_instance_or_none(console, prompt: str = "Which instance?"):
     names = instances.list_names()
     if not names:
-        console.print("[yellow]nenhuma instância ainda.[/]")
+        console.print("[yellow]no instances yet.[/]")
         return None
     return _select(prompt, choices=names + [_sep(), _back_choice()])
 
@@ -270,11 +270,11 @@ def _instance_add(console) -> None:
     from .instances import Instance, _derive_repo_name
 
     style = _style()
-    name = questionary.text("Nome da instância (slug):", qmark="●", style=style).ask()
+    name = questionary.text("Instance name (slug):", qmark="●", style=style).ask()
     if not name:
         return
     if instances.exists(name):
-        console.print(f"[red]instância {name!r} já existe.[/]")
+        console.print(f"[red]instance {name!r} already exists.[/]")
         return
 
     from .engines import available as engines_available
@@ -282,24 +282,24 @@ def _instance_add(console) -> None:
     engine = _select("Engine:", choices=engines_available() or ["claude"])
     if engine is None:
         return
-    engine_auth = _select("Auth do engine:", choices=["subscription", "api-key"])
+    engine_auth = _select("Engine auth:", choices=["subscription", "api-key"])
     if engine_auth is None:
         return
     # Deliverable is decided per-request (the POST/CLI says what to do); the
     # instance only carries a safe fallback for requests that omit it.
     deliverable = "analysis"
     model = questionary.text(
-        "Modelo (opcional, Enter p/ pular):", qmark="●", style=style
+        "Model (optional, Enter to skip):", qmark="●", style=style
     ).ask() or None
     branch = questionary.text(
-        "Branch base:", default="main", qmark="●", style=style
+        "Base branch:", default="main", qmark="●", style=style
     ).ask() or "main"
 
     repos: list[dict] = []
     while questionary.confirm(
-        f"Adicionar repositório ao pool? ({len(repos)} já)", default=False, qmark="●", style=style
+        f"Add a repo to the pool? ({len(repos)} so far)", default=False, qmark="●", style=style
     ).ask():
-        spec = questionary.text("repo (name=url ou url):", qmark="●", style=style).ask()
+        spec = questionary.text("repo (name=url or url):", qmark="●", style=style).ask()
         if not spec:
             break
         if "=" in spec:
@@ -320,17 +320,17 @@ def _instance_add(console) -> None:
     try:
         instances.save(inst)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]erro:[/] {exc}")
+        console.print(f"[red]error:[/] {exc}")
         return
     key, fp = secrets.generate_key(inst)
     inst.key_fingerprint = fp
     instances.save(inst)
     console.print(
         Panel(
-            f"[bold]Instância [cyan]{name}[/] criada.[/]\n\n"
-            f"[yellow]Chave de criptografia (mostrada UMA vez — guarde com segurança):[/]\n"
+            f"[bold]Instance [cyan]{name}[/] created.[/]\n\n"
+            f"[yellow]Encryption key (shown ONCE — keep it safe):[/]\n"
             f"[bold]{key}[/]\n\nfingerprint: {fp}",
-            title="guarde esta chave",
+            title="save this key",
             border_style="yellow",
         )
     )
@@ -339,9 +339,9 @@ def _instance_add(console) -> None:
         _set_api_key(console, inst)
     else:  # subscription
         console.print(
-            "[dim]auth = subscription (isolada do host). Faça o login desta instância:[/]\n"
+            "[dim]auth = subscription (isolated from the host). Log this instance in:[/]\n"
             f"  [bold]agenthook login {name}[/]\n"
-            "[dim]Cada instância tem login próprio; o ~/.claude do host nunca é usado.[/]"
+            "[dim]Each instance has its own login; the host's ~/.claude is never used.[/]"
         )
 
 
@@ -350,43 +350,43 @@ def _instance_view(console) -> None:
 
     from rich.table import Table
 
-    name = _pick_instance_or_none(console, "Ver qual instância?")
+    name = _pick_instance_or_none(console, "View which instance?")
     if not name or name == _BACK:
         return
     inst = instances.load(name)
 
-    info = Table("campo", "valor", title=f"instância: {name}", title_style="bold cyan")
+    info = Table("field", "value", title=f"instance: {name}", title_style="bold cyan")
     info.add_row("engine", inst.engine)
     info.add_row("engine_auth", inst.engine_auth)
     info.add_row("deliverable", inst.deliverable)
     info.add_row("model", inst.model or "-")
     info.add_row("branch_base", inst.branch_base)
-    info.add_row("paused", "[red]sim[/]" if inst.paused else "não")
+    info.add_row("paused", "[red]yes[/]" if inst.paused else "no")
     console.print(info)
 
     repos = inst.resolved_repos()
     if repos:
-        rt = Table("repo", "url", "branch_base", title="pool de repositórios")
+        rt = Table("repo", "url", "branch_base", title="repo pool")
         for r in repos:
             rt.add_row(r.name, r.url, r.branch_base)
         console.print(rt)
     else:
-        console.print("[dim]sem repositórios no pool.[/]")
+        console.print("[dim]no repos in the pool.[/]")
 
     try:
         items = secrets.get_backend(inst).items(inst)
     except Exception:  # noqa: BLE001
         items = []
     if items:
-        et = Table("env", "valor", "secret", title="variáveis de ambiente")
+        et = Table("env", "value", "secret", title="environment variables")
         for ev in items:
             shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
-            et.add_row(ev.name, shown, "sim" if ev.secret else "não")
+            et.add_row(ev.name, shown, "yes" if ev.secret else "no")
         console.print(et)
 
     jobs = [j for j in store.list_jobs(limit=50) if j.instance == name][:8]
     if jobs:
-        jt = Table("job", "status", "deliverable", title="jobs recentes")
+        jt = Table("job", "status", "deliverable", title="recent jobs")
         for j in jobs:
             jt.add_row(j.id, j.status.value, j.deliverable.value)
         console.print(jt)
@@ -395,37 +395,37 @@ def _instance_view(console) -> None:
 
 
 def _instance_delete(console) -> None:
-    name = _pick_instance_or_none(console, "Excluir qual instância?")
+    name = _pick_instance_or_none(console, "Delete which instance?")
     if not name or name == _BACK:
         return
-    if not confirm(f"Excluir {name!r} e seus segredos? Isso é irreversível."):
-        console.print("cancelado.")
+    if not confirm(f"Delete {name!r} and its secrets? This is irreversible."):
+        console.print("cancelled.")
         return
     instances.delete(name)
-    console.print(f"[green]excluída[/] {name}")
+    console.print(f"[green]deleted[/] {name}")
 
 
 # --- Instance edit -----------------------------------------------------------
 
 
 def _instance_edit(console) -> None:
-    name = _pick_instance_or_none(console, "Editar qual instância?")
+    name = _pick_instance_or_none(console, "Edit which instance?")
     if not name or name == _BACK:
         return
     while True:
         inst = instances.load(name)
         console.print(
-            f"[bold]Editando [cyan]{name}[/][/]  "
+            f"[bold]Editing [cyan]{name}[/][/]  "
             f"(engine={inst.engine}, auth={inst.engine_auth}, "
             f"deliverable={inst.deliverable}, repos={len(inst.resolved_repos())}, "
-            f"{'[red]pausada[/]' if inst.paused else 'ativa'})"
+            f"{'[red]paused[/]' if inst.paused else 'active'})"
         )
         field = _select(
-            "Qual campo?",
+            "Which field?",
             choices=[
-                "deliverable", "engine", "autenticação", "model", "branch base",
-                "repos (pool)", "variáveis de ambiente",
-                "pausar / retomar", _sep(), _back_choice(),
+                "deliverable", "engine", "authentication", "model", "branch base",
+                "repos (pool)", "env vars",
+                "pause / resume", _sep(), _back_choice(),
             ],
         )
         if field is None or field == _BACK:
@@ -433,24 +433,24 @@ def _instance_edit(console) -> None:
         if field == "deliverable":
             from .models import Deliverable
 
-            val = _select("Novo deliverable:", choices=[d.value for d in Deliverable])
+            val = _select("New deliverable:", choices=[d.value for d in Deliverable])
             if val:
                 inst.deliverable = val
                 _save_inst(console, inst)
         elif field == "engine":
             from .engines import available as engines_available
 
-            val = _select("Novo engine:", choices=engines_available() or ["claude"])
+            val = _select("New engine:", choices=engines_available() or ["claude"])
             if val:
                 inst.engine = val
                 _save_inst(console, inst)
-        elif field == "autenticação":
+        elif field == "authentication":
             _edit_auth(console, name)
         elif field == "model":
             import questionary
 
             val = questionary.text(
-                "Modelo (vazio = nenhum):", default=inst.model or "", qmark="●", style=_style()
+                "Model (empty = none):", default=inst.model or "", qmark="●", style=_style()
             ).ask()
             inst.model = val or None
             _save_inst(console, inst)
@@ -458,27 +458,27 @@ def _instance_edit(console) -> None:
             import questionary
 
             val = questionary.text(
-                "Branch base:", default=inst.branch_base, qmark="●", style=_style()
+                "Base branch:", default=inst.branch_base, qmark="●", style=_style()
             ).ask()
             if val:
                 inst.branch_base = val
                 _save_inst(console, inst)
         elif field == "repos (pool)":
             _edit_repos(console, name)
-        elif field == "variáveis de ambiente":
+        elif field == "env vars":
             _edit_env(console, name)
-        elif field.startswith("pausar"):
+        elif field.startswith("pause"):
             instances.set_paused(name, not inst.paused,
-                                 "pausada manualmente" if not inst.paused else None)
+                                 "paused manually" if not inst.paused else None)
             console.print("[green]ok[/]")
 
 
 def _save_inst(console, inst) -> None:
     try:
         instances.save(inst)
-        console.print("[green]salvo.[/]")
+        console.print("[green]saved.[/]")
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]erro ao salvar:[/] {exc}")
+        console.print(f"[red]save error:[/] {exc}")
 
 
 def _set_api_key(console, inst) -> None:
@@ -489,13 +489,13 @@ def _set_api_key(console, inst) -> None:
     names = get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]
     key_name = names[0]
     val = questionary.password(
-        f"{key_name} (vira secret cifrado da instância):", qmark="●", style=_style()
+        f"{key_name} (stored as an encrypted instance secret):", qmark="●", style=_style()
     ).ask()
     if val:
         secrets.get_backend(inst).set(inst, key_name, val, True)
-        console.print(f"[green]{key_name} salvo (cifrado).[/]")
+        console.print(f"[green]{key_name} saved (encrypted).[/]")
     else:
-        console.print("[yellow]cancelado.[/]")
+        console.print("[yellow]cancelled.[/]")
 
 
 def _edit_auth(console, name: str) -> None:
@@ -505,38 +505,38 @@ def _edit_auth(console, name: str) -> None:
         inst = instances.load(name)
         st = engine_auth.is_authenticated(inst)
         status = (
-            "[green]logado[/]" if st is True
-            else "[yellow]não logado[/]" if st is False
+            "[green]logged in[/]" if st is True
+            else "[yellow]not logged in[/]" if st is False
             else "[dim]via api-key (secret)[/]"
         )
         console.print(
-            f"[bold]auth de [cyan]{name}[/][/]  "
-            f"engine={inst.engine} · método={inst.engine_auth} · {status}"
+            f"[bold]auth for [cyan]{name}[/][/]  "
+            f"engine={inst.engine} · method={inst.engine_auth} · {status}"
         )
-        first = "fazer login (isolado)" if inst.engine_auth == "subscription" else "definir / trocar api-key"
+        first = "log in (isolated)" if inst.engine_auth == "subscription" else "set / change api-key"
         act = _select(
-            "Autenticação:",
+            "Authentication:",
             choices=[
                 first,
-                "trocar método (subscription ↔ api-key)",
-                "deslogar / limpar dados",
+                "switch method (subscription ↔ api-key)",
+                "log out / wipe data",
                 _sep(), _back_choice(),
             ],
         )
         if act is None or act == _BACK:
             return
-        if act.startswith("fazer login"):
+        if act.startswith("log in"):
             try:
                 from . import shell as shell_mod
 
-                console.print("[dim]abrindo login isolado… faça /login e depois saia (/exit).[/]")
+                console.print("[dim]opening isolated login… run /login, then exit (/exit).[/]")
                 shell_mod.login(inst.name)
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]erro:[/] {exc}")
-        elif act.startswith("definir"):
+                console.print(f"[red]error:[/] {exc}")
+        elif act.startswith("set"):
             _set_api_key(console, inst)
-        elif act.startswith("trocar método"):
-            val = _select("Novo método:", choices=["subscription", "api-key"])
+        elif act.startswith("switch method"):
+            val = _select("New method:", choices=["subscription", "api-key"])
             if val and val != inst.engine_auth:
                 inst.engine_auth = val
                 _save_inst(console, inst)
@@ -544,11 +544,11 @@ def _edit_auth(console, name: str) -> None:
                     _set_api_key(console, instances.load(name))
                 else:
                     console.print(
-                        f"[dim]agora faça o login:[/] [bold]agenthook login {name}[/] "
-                        "[dim](ou 'fazer login' aqui).[/]"
+                        f"[dim]now log in:[/] [bold]agenthook login {name}[/] "
+                        "[dim](or 'log in' here).[/]"
                     )
-        elif act.startswith("deslogar"):
-            if confirm(f"Deslogar {name!r} e apagar os dados de auth isolados?"):
+        elif act.startswith("log out"):
+            if confirm(f"Log {name!r} out and wipe its isolated auth data?"):
                 wiped = engine_auth.logout(inst)
                 try:  # also drop the api-key secret, if any
                     from .engines import get_engine
@@ -557,7 +557,7 @@ def _edit_auth(console, name: str) -> None:
                         secrets.get_backend(inst).delete(inst, key)
                 except Exception:  # noqa: BLE001
                     pass
-                console.print("[green]auth limpa.[/]" if wiped else "[dim]nada a limpar.[/]")
+                console.print("[green]auth wiped.[/]" if wiped else "[dim]nothing to wipe.[/]")
 
 
 def _edit_repos(console, name: str) -> None:
@@ -570,15 +570,15 @@ def _edit_repos(console, name: str) -> None:
     while True:
         inst = instances.load(name)
         repos = inst.resolved_repos()
-        t = Table("repo", "url", "branch_base", title=f"pool de {name}")
+        t = Table("repo", "url", "branch_base", title=f"pool for {name}")
         for r in repos:
             t.add_row(r.name, r.url, r.branch_base)
-        console.print(t if repos else "[dim]pool vazio.[/]")
-        act = _select("Repositórios:", choices=["adicionar", "remover", _sep(), _back_choice()])
+        console.print(t if repos else "[dim]empty pool.[/]")
+        act = _select("Repos:", choices=["add", "remove", _sep(), _back_choice()])
         if act is None or act == _BACK:
             return
-        if act == "adicionar":
-            spec = questionary.text("repo (name=url ou url):", qmark="●", style=style).ask()
+        if act == "add":
+            spec = questionary.text("repo (name=url or url):", qmark="●", style=style).ask()
             if not spec:
                 continue
             if "=" in spec:
@@ -587,12 +587,12 @@ def _edit_repos(console, name: str) -> None:
             else:
                 entry = {"name": _derive_repo_name(spec), "url": spec.strip()}
             branch = questionary.text(
-                "branch base (vazio = herda):", qmark="●", style=style
+                "base branch (empty = inherit):", qmark="●", style=style
             ).ask()
             if branch:
                 entry["branch_base"] = branch
             if entry["name"] in inst.repo_names():
-                console.print(f"[red]repo {entry['name']!r} já existe no pool.[/]")
+                console.print(f"[red]repo {entry['name']!r} already in the pool.[/]")
                 continue
             # migrate a legacy single repo into the pool transparently
             if inst.repo and not inst.repos:
@@ -600,10 +600,10 @@ def _edit_repos(console, name: str) -> None:
                 inst.repo = None
             inst.repos.append(entry)
             _save_inst(console, inst)
-        elif act == "remover":
+        elif act == "remove":
             if not repos:
                 continue
-            target = _select("Remover qual?", choices=[r.name for r in repos] + [_sep(), _back_choice()])
+            target = _select("Remove which?", choices=[r.name for r in repos] + [_sep(), _back_choice()])
             if not target or target == _BACK:
                 continue
             inst.repos = [
@@ -622,34 +622,34 @@ def _edit_env(console, name: str) -> None:
         inst = instances.load(name)
         backend = secrets.get_backend(inst)
         items = backend.items(inst)
-        t = Table("env", "valor", "secret", title=f"env de {name}")
+        t = Table("env", "value", "secret", title=f"env for {name}")
         for ev in items:
             shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
-            t.add_row(ev.name, shown, "sim" if ev.secret else "não")
-        console.print(t if items else "[dim]sem variáveis.[/]")
-        act = _select("Variáveis de ambiente:", choices=["definir", "remover", _sep(), _back_choice()])
+            t.add_row(ev.name, shown, "yes" if ev.secret else "no")
+        console.print(t if items else "[dim]no variables.[/]")
+        act = _select("Environment variables:", choices=["set", "remove", _sep(), _back_choice()])
         if act is None or act == _BACK:
             return
-        if act == "definir":
-            key = questionary.text("Nome (KEY):", qmark="●", style=style).ask()
+        if act == "set":
+            key = questionary.text("Name (KEY):", qmark="●", style=style).ask()
             if not key:
                 continue
-            value = questionary.text("Valor:", qmark="●", style=style).ask() or ""
+            value = questionary.text("Value:", qmark="●", style=style).ask() or ""
             is_secret = bool(
                 questionary.confirm(
-                    "É secret (ofuscar)?", default=True, qmark="●", style=style
+                    "Is it a secret (obfuscate)?", default=True, qmark="●", style=style
                 ).ask()
             )
             backend.set(inst, key, value, is_secret)
-            console.print(f"[green]definida[/] {key}{' (secret)' if is_secret else ''}")
-        elif act == "remover":
+            console.print(f"[green]set[/] {key}{' (secret)' if is_secret else ''}")
+        elif act == "remove":
             if not items:
                 continue
-            target = _select("Remover qual?", choices=[ev.name for ev in items] + [_sep(), _back_choice()])
+            target = _select("Remove which?", choices=[ev.name for ev in items] + [_sep(), _back_choice()])
             if not target or target == _BACK:
                 continue
             backend.delete(inst, target)
-            console.print(f"[green]removida[/] {target}")
+            console.print(f"[green]removed[/] {target}")
 
 
 # --- Listings ----------------------------------------------------------------
@@ -663,7 +663,7 @@ def _show_instances(console) -> None:
         names = inst.repo_names()
         t.add_row(inst.name, inst.engine, inst.deliverable,
                   ", ".join(names) if names else "-",
-                  "[red]sim[/]" if inst.paused else "não")
+                  "[red]yes[/]" if inst.paused else "no")
     console.print(t)
 
 

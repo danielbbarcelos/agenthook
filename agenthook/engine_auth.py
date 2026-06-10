@@ -3,7 +3,7 @@
 Distinct from ``auth.py`` (which guards the webhook endpoint). Here each instance
 authenticates its coding engine on its own, under ``~/.agenthook/auth/<instance>/``;
 the host's ambient login (``~/.claude``) is never used. Shared by the CLI
-(``agenthook login``) and the guided TUI (instance › autenticação).
+(``agenthook login``) and the guided TUI (instance › authentication).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def login_env(inst: Instance) -> tuple[list[str], dict[str, str]]:
     auth_dir = auth_dir_for(inst)
     argv = engine.login_argv(auth_dir)
     if not argv:
-        raise RuntimeError(f"engine {engine.name!r} não tem login interativo; use api-key.")
+        raise RuntimeError(f"engine {engine.name!r} has no interactive login; use api-key.")
     env = dict(os.environ)
     env.update(engine.auth_config_env(inst, auth_dir))
     return argv, env

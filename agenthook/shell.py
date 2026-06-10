@@ -71,8 +71,8 @@ def _cleanup(ctx: RunContext) -> None:
 
 def _frame(inst, engine, cfg, kind: str) -> None:
     label = "shell" if kind == "shell" else "login"
-    print(f"\n┌─ container: {inst.name} (isolado) · {engine.name}/{inst.engine_auth} · {label} ─┐")
-    print(f"│ imagem {cfg.docker_image} · o ~/.claude do host NÃO é usado")
+    print(f"\n┌─ container: {inst.name} (isolated) · {engine.name}/{inst.engine_auth} · {label} ─┐")
+    print(f"│ image {cfg.docker_image} · the host's ~/.claude is NOT used")
     print("└" + "─" * 48)
 
 
@@ -103,7 +103,7 @@ def _docker_session(inst, cfg, *, kind: str, exec_replace: bool = False) -> int 
     else:  # login
         inner = engine.login_argv(auth_dir)
         if not inner:
-            raise RuntimeError(f"engine {engine.name!r} não tem login interativo; use api-key.")
+            raise RuntimeError(f"engine {engine.name!r} has no interactive login; use api-key.")
 
     cmd += ["-w", "/workspace", cfg.docker_image, *inner]
     _frame(inst, engine, cfg, kind)
@@ -118,7 +118,7 @@ def _host_shell(inst, cfg) -> int | None:
     engine = get_engine(inst.engine)
     ctx = _prepare(inst, cfg, engine)
     env = _process_env(ctx)
-    print(f"\n┌─ shell (host, NÃO isolado): {inst.name} ─┐")
+    print(f"\n┌─ shell (host, NOT isolated): {inst.name} ─┐")
     print(f"│ workspace: {ctx.wt}")
     print("└" + "─" * 40)
     try:
