@@ -1,0 +1,40 @@
+# Declarative instance config (DESIGN.md §21).
+# Apply with:  agenthook apply -f examples/agenthook.yaml
+# Secrets never live here — set them with `agenthook env set <name> KEY VALUE --secret`.
+
+instances:
+  # 1) Read-only support analysis: every POST with the same thread_key shares
+  #    context, so a ticket's whole conversation stays in one session.
+  suporte:
+    engine: claude
+    deliverable: analysis
+    webhook_auth: { schemes: [bearer] }
+    on_result: [logs, callback]
+    context_template: |
+      Você atende solicitações de suporte via {{ request_type }}.
+      Responda SEMPRE em {{ language }}.
+      Solicitante: {{ requester.name }} — resposta destinada a {{ answering_to }}.
+    templates:
+      ticket: |
+        Atenda o ticket #{{ subject_ref.ticket_id }} de {{ requester.name }}.
+        Prioridade: {{ priority }}. Contexto: {{ metadata.description }}
+
+  # 2) Autonomous bugfix that opens a PR, gated on tests passing.
+  bugfix:
+    engine: claude
+    repo: git@github.com:me/app.git
+    deliverable: pr
+    branch_base: main
+    allow_overrides: [mode]
+    on_result: [logs, callback, notify]
+    limits: { concurrency: 1, max_turns: 40, timeout: 1800 }
+    verify:
+      setup: "npm ci"
+      checks: ["npm test", "npm run lint"]
+      gate: true
+      max_fix_iterations: 3
+    schedules:
+      - name: nightly-deps
+        cron: "0 3 * * 1"
+        deliverable: pr
+        prompt: "Update safe dependencies and open a PR."

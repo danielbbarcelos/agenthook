@@ -12,7 +12,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from . import approval, auth, instances, store
@@ -25,12 +25,18 @@ from .worker import Worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init_db()
-    worker = Worker(max_parallel=load_config().default_concurrency * 4)
+    worker = Worker(max_parallel=max(1, load_config().default_concurrency * 4))
     worker.start()
+    from .scheduler import Scheduler
+
+    scheduler = Scheduler(worker)
+    scheduler.start()
     app.state.worker = worker
+    app.state.scheduler = scheduler
     try:
         yield
     finally:
+        scheduler.stop()
         worker.stop()
 
 

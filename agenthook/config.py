@@ -8,7 +8,7 @@ Global config lives at ``~/.agenthook/config.yaml``. The declarative
 from __future__ import annotations
 
 import secrets as _pysecrets
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 

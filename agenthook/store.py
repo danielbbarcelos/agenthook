@@ -19,7 +19,6 @@ from .instances import load as load_instance
 from .models import Deliverable, Job, JobStatus, Session, SessionStatus
 from .serde import (
     job_from_json,
-    job_to_dict,
     job_to_json,
     session_from_dict,
     session_to_dict,
@@ -89,12 +88,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_requester ON audit(requester);
 """
 
 
+_initialized_paths: set[str] = set()
+
+
 @contextmanager
 def _conn() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(paths.jobs_db(), timeout=30)
+    db_path = paths.jobs_db()
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    if str(db_path) not in _initialized_paths:
+        conn.executescript(_SCHEMA)
+        _initialized_paths.add(str(db_path))
     try:
         yield conn
         conn.commit()
