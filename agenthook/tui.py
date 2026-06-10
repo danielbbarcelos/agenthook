@@ -47,8 +47,25 @@ def _style():
             ("highlighted", "fg:#b48ead"),
             ("selected", "fg:#a3be8c"),
             ("answer", "fg:#88c0d0"),
+            ("separator", "fg:#6b7280"),
         ]
     )
+
+
+_MUTED = "fg:#6b7280"
+
+
+def _back_choice(label: str = "voltar"):
+    """A muted '←' back/quit entry, set apart from the real actions."""
+    import questionary
+
+    return questionary.Choice(title=[(_MUTED, f"←  {label}")], value=label)
+
+
+def _sep(label: str = ""):
+    import questionary
+
+    return questionary.Separator(f"  {label}" if label else " ")
 
 
 # --- Reusable pickers (used by the CLI too) ---------------------------------
@@ -138,6 +155,7 @@ def _pause(console) -> None:
 def _select(message: str, choices: list):
     import questionary
 
+    print()  # breathing room above every menu
     return questionary.select(message, choices=choices, qmark="●", style=_style()).ask()
 
 
@@ -158,7 +176,7 @@ def main_menu() -> None:
     while True:
         choice = _select(
             "O que deseja fazer?",
-            choices=["instâncias", "jobs", "sessões", _QUIT],
+            choices=["instâncias", "jobs", "sessões", _sep(), _back_choice(_QUIT)],
         )
         if choice is None:  # Ctrl+C on the top menu
             interrupts += 1
@@ -189,14 +207,18 @@ def _instances_menu(console) -> None:
         choice = _select(
             "Instâncias — o que deseja?",
             choices=[
+                _sep("interagir"),
                 "conversar (chat)",
+                _sep("gerenciar"),
                 "adicionar",
                 "ver detalhes",
                 "editar",
                 "variáveis de ambiente",
-                "excluir",
+                _sep("listas / remover"),
                 "listar",
-                _BACK,
+                "excluir",
+                _sep(),
+                _back_choice(),
             ],
         )
         if choice is None or choice == _BACK:
@@ -221,7 +243,6 @@ def _instances_menu(console) -> None:
             _instance_delete(console)
         elif choice == "listar":
             _show_instances(console)
-        console.print()
 
 
 def _pick_instance_or_none(console, prompt: str = "Qual instância?"):
@@ -229,7 +250,7 @@ def _pick_instance_or_none(console, prompt: str = "Qual instância?"):
     if not names:
         console.print("[yellow]nenhuma instância ainda.[/]")
         return None
-    return _select(prompt, choices=names + [_BACK])
+    return _select(prompt, choices=names + [_sep(), _back_choice()])
 
 
 def _instance_add(console) -> None:
@@ -392,7 +413,7 @@ def _instance_edit(console) -> None:
             choices=[
                 "deliverable", "engine", "engine_auth", "model", "branch base",
                 "repos (pool)", "variáveis de ambiente",
-                "pausar / retomar", _BACK,
+                "pausar / retomar", _sep(), _back_choice(),
             ],
         )
         if field is None or field == _BACK:
@@ -465,7 +486,7 @@ def _edit_repos(console, name: str) -> None:
         for r in repos:
             t.add_row(r.name, r.url, r.branch_base)
         console.print(t if repos else "[dim]pool vazio.[/]")
-        act = _select("Repositórios:", choices=["adicionar", "remover", _BACK])
+        act = _select("Repositórios:", choices=["adicionar", "remover", _sep(), _back_choice()])
         if act is None or act == _BACK:
             return
         if act == "adicionar":
@@ -494,7 +515,7 @@ def _edit_repos(console, name: str) -> None:
         elif act == "remover":
             if not repos:
                 continue
-            target = _select("Remover qual?", choices=[r.name for r in repos] + [_BACK])
+            target = _select("Remover qual?", choices=[r.name for r in repos] + [_sep(), _back_choice()])
             if not target or target == _BACK:
                 continue
             inst.repos = [
@@ -518,7 +539,7 @@ def _edit_env(console, name: str) -> None:
             shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
             t.add_row(ev.name, shown, "sim" if ev.secret else "não")
         console.print(t if items else "[dim]sem variáveis.[/]")
-        act = _select("Variáveis de ambiente:", choices=["definir", "remover", _BACK])
+        act = _select("Variáveis de ambiente:", choices=["definir", "remover", _sep(), _back_choice()])
         if act is None or act == _BACK:
             return
         if act == "definir":
@@ -536,7 +557,7 @@ def _edit_env(console, name: str) -> None:
         elif act == "remover":
             if not items:
                 continue
-            target = _select("Remover qual?", choices=[ev.name for ev in items] + [_BACK])
+            target = _select("Remover qual?", choices=[ev.name for ev in items] + [_sep(), _back_choice()])
             if not target or target == _BACK:
                 continue
             backend.delete(inst, target)
