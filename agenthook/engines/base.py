@@ -70,6 +70,16 @@ class Engine(abc.ABC):
         """Names of env vars that must be present for this engine's auth."""
         return []
 
+    def auth_config_env(self, inst: Instance, auth_dir) -> dict[str, str]:
+        """Env vars that point the engine at the instance's ISOLATED config/auth
+        dir, so it never reads the host's ambient login. Default: none."""
+        return {}
+
+    def login_argv(self, auth_dir) -> list[str] | None:
+        """argv that interactively logs a subscription account into ``auth_dir``,
+        or None if this engine has no interactive login."""
+        return None
+
     # ---- helpers ----------------------------------------------------------
 
     def supports(self, *, plan: bool = False, resume: bool = False, mcp: bool = False) -> bool:

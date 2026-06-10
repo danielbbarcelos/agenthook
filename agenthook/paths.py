@@ -61,5 +61,14 @@ def logs_dir(instance: str) -> Path:
     return d
 
 
+def auth_dir(instance: str) -> Path:
+    """Per-instance, isolated engine auth/config dir — never the host's ambient
+    login. Each instance authenticates on its own (api-key secret or its own
+    subscription login under here)."""
+    d = home() / "auth" / instance
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def job_log(instance: str, job_id: str) -> Path:
     return logs_dir(instance) / f"{job_id}.log"

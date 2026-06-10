@@ -51,8 +51,17 @@ class ClaudeEngine(Engine):
 
     def auth_env_names(self, inst: Instance) -> list[str]:
         if inst.engine_auth == "subscription":
-            return []  # uses mounted ~/.claude credentials
+            return []  # uses the instance's own isolated login (see login_argv)
         return ["ANTHROPIC_API_KEY"]
+
+    def auth_config_env(self, inst: Instance, auth_dir) -> dict[str, str]:
+        # Relocate Claude Code's whole config (creds + state) to the instance's
+        # own dir; the host's ~/.claude is never read, for either auth mode.
+        return {"CLAUDE_CONFIG_DIR": str(auth_dir)}
+
+    def login_argv(self, auth_dir) -> list[str]:
+        # Interactive: the user runs /login inside, writing creds into auth_dir.
+        return [self.binary]
 
     def parse_output(self, stdout, stderr, exit_code):
         result = Result(raw=stdout)

@@ -448,6 +448,34 @@ def enter_cmd(
     )
 
 
+@app.command("login")
+def login_cmd(name: str):
+    """Log a subscription account into the instance's ISOLATED auth dir.
+
+    Opens the engine pointed at ``~/.agenthook/auth/<instance>/`` — the host's
+    own login (~/.claude) is never used. Run /login inside, then exit.
+    """
+    import os
+
+    from .engines import get_engine
+
+    inst = _load(name)
+    engine = get_engine(inst.engine)
+    auth_dir = paths.auth_dir(inst.name) / engine.name
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    argv = engine.login_argv(auth_dir)
+    if not argv:
+        _err(f"engine {engine.name!r} não tem login interativo; use auth=api-key.")
+    env = dict(os.environ)
+    env.update(engine.auth_config_env(inst, auth_dir))
+    console.print(
+        f"abrindo [cyan]{argv[0]}[/] isolado para [cyan]{name}[/]  "
+        f"[dim](config: {auth_dir})[/]\n"
+        f"[yellow]→ faça /login nesta janela e depois saia (/exit).[/]\n"
+    )
+    os.execvpe(argv[0], argv, env)
+
+
 @app.command("dry-run")
 def dry_run_cmd(
     name: str,

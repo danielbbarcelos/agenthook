@@ -48,6 +48,36 @@ def ensure_mirror(inst: Instance, repo: RepoRef, env: Mapping[str, str] | None =
     return path
 
 
+def _resolve_base_ref(
+    mirror: Path, base: str | None, env: Mapping[str, str] | None = None
+) -> str:
+    """Return a checkout-able ref, preferring ``base`` but falling back to the
+    remote's actual default branch — repos named ``master`` (or anything other
+    than ``main``) would otherwise fail with 'invalid reference: origin/main'."""
+    if base:
+        try:
+            _run(["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}"],
+                 cwd=mirror, env=env)
+            return f"origin/{base}"
+        except GitError:
+            pass
+    # Fall back to origin/HEAD (the remote default branch).
+    for _ in range(2):
+        try:
+            return _run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                        cwd=mirror, env=env)
+        except GitError:
+            # origin/HEAD not set yet — derive it from the remote, then retry.
+            try:
+                _run(["git", "remote", "set-head", "origin", "--auto"], cwd=mirror, env=env)
+            except GitError:
+                break
+    raise GitError(
+        f"could not resolve a base branch in {mirror} "
+        f"(tried {base!r} and origin/HEAD); is the repo empty?"
+    )
+
+
 def create_worktree(
     inst: Instance,
     repo: RepoRef,
@@ -56,12 +86,12 @@ def create_worktree(
     env: Mapping[str, str] | None = None,
 ) -> Path:
     mirror = ensure_mirror(inst, repo, env)
-    base = base or repo.branch_base
+    ref = _resolve_base_ref(mirror, base or repo.branch_base, env)
     dest = Path(dest)
     if dest.exists():
         remove_worktree(inst, repo, dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "worktree", "add", "--force", "--detach", str(dest), f"origin/{base}"], cwd=mirror)
+    _run(["git", "worktree", "add", "--force", "--detach", str(dest), ref], cwd=mirror, env=env)
     return dest
 
 

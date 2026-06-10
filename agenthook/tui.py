@@ -268,7 +268,6 @@ def _instance_add(console) -> None:
         return
 
     from .engines import available as engines_available
-    from .models import Deliverable
 
     engine = _select("Engine:", choices=engines_available() or ["claude"])
     if engine is None:
@@ -276,9 +275,9 @@ def _instance_add(console) -> None:
     engine_auth = _select("Auth do engine:", choices=["subscription", "api-key"])
     if engine_auth is None:
         return
-    deliverable = _select("Deliverable padrão:", choices=[d.value for d in Deliverable])
-    if deliverable is None:
-        return
+    # Deliverable is decided per-request (the POST/CLI says what to do); the
+    # instance only carries a safe fallback for requests that omit it.
+    deliverable = "analysis"
     model = questionary.text(
         "Modelo (opcional, Enter p/ pular):", qmark="●", style=style
     ).ask() or None
@@ -325,11 +324,28 @@ def _instance_add(console) -> None:
             border_style="yellow",
         )
     )
-    if engine_auth == "subscription":
+    # Per-instance auth — never inherited from the host's ambient login.
+    if engine_auth == "api-key":
+        from .engines import get_engine
+
+        names = get_engine(engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]
+        key_name = names[0]
+        val = questionary.password(
+            f"{key_name} (vira secret cifrado da instância):", qmark="●", style=_style()
+        ).ask()
+        if val:
+            secrets.get_backend(inst).set(inst, key_name, val, True)
+            console.print(f"[green]{key_name} salvo (cifrado).[/]")
+        else:
+            console.print(
+                f"[yellow]sem {key_name} ainda[/] — defina depois em "
+                "'variáveis de ambiente'."
+            )
+    else:  # subscription
         console.print(
-            "[dim]auth = subscription: nada de API key. No modo host (use_docker:false) o\n"
-            "engine reaproveita seu login do Claude Code (~/.claude). Garanta que `claude`\n"
-            "está logado nesta máquina (`claude` › /login).[/]"
+            "[dim]auth = subscription (isolada do host). Faça o login desta instância:[/]\n"
+            f"  [bold]agenthook login {name}[/]\n"
+            "[dim]Cada instância tem login próprio; o ~/.claude do host nunca é usado.[/]"
         )
 
 

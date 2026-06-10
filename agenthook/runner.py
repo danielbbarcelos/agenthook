@@ -114,7 +114,11 @@ def dry_run(job: Job) -> dict:
     context = templating.build_context(job.request, env_nonsecret)
     prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
     spec = _build_runspec(inst, engine, job, prompt, resume_id=None, sandbox=inst is not None)
+    from . import paths
+
+    auth_config = engine.auth_config_env(inst, paths.auth_dir(inst.name) / engine.name)
     masked = {k: secrets.obfuscate(v) for k, v in env_all.items()}
+    masked.update(auth_config)  # config-dir paths aren't secrets — show them plainly
     try:
         selected = inst.select_repos(job.request.get("repos"))
         repos_info = [
@@ -383,6 +387,13 @@ def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     cmd += ["-v", f"{ctx.wt}:/workspace{ro}", "-w", "/workspace"]
     if ctx.session_home:
         cmd += ["-v", f"{ctx.session_home}:/root", "-e", "HOME=/root"]
+    # Isolated engine config/auth — mount the instance's dir and repoint the
+    # config-dir var(s) at the in-container path (host login never enters).
+    auth_env = _engine_auth_env(ctx)
+    if auth_env:
+        cmd += ["-v", f"{_auth_dir(ctx)}:/agenthook-auth"]
+        for k in auth_env:
+            cmd += ["-e", f"{k}=/agenthook-auth"]
     for k, v in ctx.env_all.items():
         cmd += ["-e", f"{k}={v}"]
     limits = ctx.inst.limits if isinstance(ctx.inst.limits, dict) else {}
@@ -395,18 +406,39 @@ def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     return cmd
 
 
+# Host vars that are safe to pass through. Engine credentials (ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, …) are deliberately NOT here: an instance must carry its own
+# auth and never inherit whatever happens to be logged in on the host.
+_ENV_PASSTHROUGH = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+    "TERM", "TZ", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+    "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+)
+
+
+def _auth_dir(ctx: RunContext):
+    from . import paths
+
+    return paths.auth_dir(ctx.inst.name) / ctx.engine.name
+
+
+def _engine_auth_env(ctx: RunContext) -> dict[str, str]:
+    """Env that points the engine at the instance's own isolated config/auth."""
+    return ctx.engine.auth_config_env(ctx.inst, _auth_dir(ctx))
+
+
 def _process_env(ctx: RunContext) -> dict[str, str]:
     import os
 
-    env = dict(os.environ)
-    env.update(ctx.env_all)
-    if ctx.session_home and not ctx.cfg.use_docker:
-        # Subscription auth lives in the host's real $HOME (~/.claude); overriding
-        # HOME would hide that login. Multi-turn continuity comes from --resume and
-        # the per-job worktree cwd, so we keep the real HOME for subscription and
-        # only isolate state into the session home for api-key engines.
-        if ctx.inst.engine_auth != "subscription":
-            env["HOME"] = str(ctx.session_home)
+    # Start from a controlled allowlist — not the whole host environment — so no
+    # ambient engine credential can leak into the run.
+    env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
+    auth_env = _engine_auth_env(ctx)
+    env.update(auth_env)        # isolated config dir (e.g. CLAUDE_CONFIG_DIR)
+    env.update(ctx.env_all)     # the instance's own secrets (e.g. ANTHROPIC_API_KEY)
+    # Engines without their own config-dir isolation fall back to a per-session HOME.
+    if not auth_env and ctx.session_home and not ctx.cfg.use_docker:
+        env["HOME"] = str(ctx.session_home)
     return env
 
 
