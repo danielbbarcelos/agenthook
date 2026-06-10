@@ -422,6 +422,32 @@ def run_cmd(
     _print_job_result(job)
 
 
+@app.command("enter")
+def enter_cmd(
+    name: str,
+    repos: Optional[str] = typer.Option(
+        None, "--repos", help="comma list of repo names to use (omit=all, ''=none)"
+    ),
+    deliverable: Optional[str] = typer.Option(
+        None, "--deliverable", help="default analysis (read-only chat)"
+    ),
+    thread_key: Optional[str] = typer.Option(
+        None, "--thread-key", help="resume/continue a named conversation"
+    ),
+):
+    """Open an interactive chat REPL against an instance (multi-turn session)."""
+    from . import chat
+
+    inst = _load(name)
+    chat.repl(
+        inst.name,
+        repos=_parse_repo_sel(repos),
+        deliverable=deliverable,
+        thread_key=thread_key,
+        console=console,
+    )
+
+
 @app.command("dry-run")
 def dry_run_cmd(
     name: str,

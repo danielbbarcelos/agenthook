@@ -401,7 +401,12 @@ def _process_env(ctx: RunContext) -> dict[str, str]:
     env = dict(os.environ)
     env.update(ctx.env_all)
     if ctx.session_home and not ctx.cfg.use_docker:
-        env["HOME"] = str(ctx.session_home)
+        # Subscription auth lives in the host's real $HOME (~/.claude); overriding
+        # HOME would hide that login. Multi-turn continuity comes from --resume and
+        # the per-job worktree cwd, so we keep the real HOME for subscription and
+        # only isolate state into the session home for api-key engines.
+        if ctx.inst.engine_auth != "subscription":
+            env["HOME"] = str(ctx.session_home)
     return env
 
 
