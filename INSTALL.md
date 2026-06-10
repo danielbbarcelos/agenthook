@@ -6,7 +6,7 @@ para o código-fonte — alterações em arquivos `.py` valem **na hora**, sem r
 ## Instalar
 
 ```bash
-cd ~/dev/00_labs/agenthook
+cd ~/dev/00_labs/claude-webhook
 pipx install --editable . --force
 ```
 
@@ -31,7 +31,7 @@ agenthook --help
 Comando único que cobre qualquer reinstalação:
 
 ```bash
-cd ~/dev/00_labs/agenthook && pipx install --editable . --force
+cd ~/dev/00_labs/claude-webhook && pipx install --editable . --force
 ```
 
 ## Servidor
