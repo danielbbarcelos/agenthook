@@ -209,6 +209,7 @@ def _instances_menu(console) -> None:
             choices=[
                 _sep("interagir"),
                 "conversar (chat)",
+                "shell (container)",
                 _sep("gerenciar"),
                 "adicionar",
                 "ver detalhes",
@@ -229,6 +230,15 @@ def _instances_menu(console) -> None:
                 from . import chat
 
                 chat.repl(name, console=console)
+        elif choice == "shell (container)":
+            name = _pick_instance_or_none(console, "Abrir shell de qual instância?")
+            if name and name != _BACK:
+                from . import shell as shell_mod
+
+                try:
+                    shell_mod.shell(name)
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]erro:[/] {exc}")
         elif choice == "adicionar":
             _instance_add(console)
         elif choice == "ver detalhes":
@@ -517,8 +527,10 @@ def _edit_auth(console, name: str) -> None:
             return
         if act.startswith("fazer login"):
             try:
+                from . import shell as shell_mod
+
                 console.print("[dim]abrindo login isolado… faça /login e depois saia (/exit).[/]")
-                engine_auth.login(inst)
+                shell_mod.login(inst.name)
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[red]erro:[/] {exc}")
         elif act.startswith("definir"):

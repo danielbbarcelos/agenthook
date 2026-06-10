@@ -455,19 +455,33 @@ def login_cmd(name: str):
     Opens the engine pointed at ``~/.agenthook/auth/<instance>/`` — the host's
     own login (~/.claude) is never used. Run /login inside, then exit.
     """
-    from . import engine_auth
+    from . import shell as shell_mod
+
+    inst = _load(name)
+    console.print(
+        f"login isolado de [cyan]{name}[/] — faça /login e depois saia (/exit).\n"
+    )
+    try:
+        shell_mod.login(inst.name)
+    except RuntimeError as exc:
+        _err(str(exc))
+
+
+@app.command("shell")
+def shell_cmd(name: str):
+    """Open an interactive shell INSIDE the instance's isolated container.
+
+    Repos checked out at /workspace, the instance's own auth mounted, distinct
+    hostname — the host is never touched (falls back to a host shell if Docker
+    is off, which is not isolated).
+    """
+    from . import shell as shell_mod
 
     inst = _load(name)
     try:
-        argv, _env = engine_auth.login_env(inst)
+        shell_mod.shell(inst.name)
     except RuntimeError as exc:
         _err(str(exc))
-    console.print(
-        f"abrindo [cyan]{argv[0]}[/] isolado para [cyan]{name}[/]  "
-        f"[dim](config: {engine_auth.auth_dir_for(inst)})[/]\n"
-        f"[yellow]→ faça /login nesta janela e depois saia (/exit).[/]\n"
-    )
-    engine_auth.login(inst, exec_replace=True)
 
 
 @app.command("dry-run")

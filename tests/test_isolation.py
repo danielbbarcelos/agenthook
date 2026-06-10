@@ -58,6 +58,37 @@ def test_engine_auth_status_and_logout():
     assert engine_auth.is_authenticated(inst) is False
 
 
+def test_docker_login_argv_is_isolated(monkeypatch):
+    """`login` in docker mode must run an isolated container: distinct hostname,
+    the instance's auth mounted, CLAUDE_CONFIG_DIR repointed inside, never ~/.claude."""
+    from agenthook import shell as shell_mod
+    from agenthook.config import Config
+
+    inst = Instance(name="dk", engine="claude", engine_auth="subscription")
+    save(inst)
+    secrets.generate_key(inst)
+    monkeypatch.setattr(shell_mod, "load_config",
+                        lambda: Config(use_docker=True, docker_image="img:test"))
+
+    captured: dict = {}
+
+    class _R:
+        returncode = 0
+
+    def _fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _R()
+
+    monkeypatch.setattr(shell_mod.subprocess, "run", _fake_run)
+    shell_mod.login("dk")
+
+    cmd = captured["cmd"]
+    assert cmd[:4] == ["docker", "run", "--rm", "-it"]
+    assert cmd[cmd.index("--hostname") + 1] == "dk"
+    assert "CLAUDE_CONFIG_DIR=/agenthook-auth" in cmd
+    assert cmd[cmd.index("img:test") + 1:] == ["claude"]  # isolated login inside
+
+
 def _make_remote(path: Path, branch: str) -> str:
     path.mkdir(parents=True)
     g = ["git", "-C", str(path)]
