@@ -44,6 +44,20 @@ def test_instance_own_api_key_is_used(monkeypatch):
     assert env["ANTHROPIC_API_KEY"] == "sk-OWN"  # the instance's own secret wins
 
 
+def test_engine_auth_status_and_logout():
+    from agenthook import engine_auth
+
+    inst = Instance(name="auth1", engine="claude", engine_auth="subscription")
+    save(inst)
+    secrets.generate_key(inst)
+    assert engine_auth.is_authenticated(inst) is False  # no creds yet
+    creds = engine_auth.auth_dir_for(inst) / ".credentials.json"
+    creds.write_text("{}")
+    assert engine_auth.is_authenticated(inst) is True
+    assert engine_auth.logout(inst) is True            # wipes the isolated dir
+    assert engine_auth.is_authenticated(inst) is False
+
+
 def _make_remote(path: Path, branch: str) -> str:
     path.mkdir(parents=True)
     g = ["git", "-C", str(path)]

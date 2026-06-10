@@ -326,21 +326,7 @@ def _instance_add(console) -> None:
     )
     # Per-instance auth — never inherited from the host's ambient login.
     if engine_auth == "api-key":
-        from .engines import get_engine
-
-        names = get_engine(engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]
-        key_name = names[0]
-        val = questionary.password(
-            f"{key_name} (vira secret cifrado da instância):", qmark="●", style=_style()
-        ).ask()
-        if val:
-            secrets.get_backend(inst).set(inst, key_name, val, True)
-            console.print(f"[green]{key_name} salvo (cifrado).[/]")
-        else:
-            console.print(
-                f"[yellow]sem {key_name} ainda[/] — defina depois em "
-                "'variáveis de ambiente'."
-            )
+        _set_api_key(console, inst)
     else:  # subscription
         console.print(
             "[dim]auth = subscription (isolada do host). Faça o login desta instância:[/]\n"
@@ -427,7 +413,7 @@ def _instance_edit(console) -> None:
         field = _select(
             "Qual campo?",
             choices=[
-                "deliverable", "engine", "engine_auth", "model", "branch base",
+                "deliverable", "engine", "autenticação", "model", "branch base",
                 "repos (pool)", "variáveis de ambiente",
                 "pausar / retomar", _sep(), _back_choice(),
             ],
@@ -448,11 +434,8 @@ def _instance_edit(console) -> None:
             if val:
                 inst.engine = val
                 _save_inst(console, inst)
-        elif field == "engine_auth":
-            val = _select("Auth do engine:", choices=["subscription", "api-key"])
-            if val:
-                inst.engine_auth = val
-                _save_inst(console, inst)
+        elif field == "autenticação":
+            _edit_auth(console, name)
         elif field == "model":
             import questionary
 
@@ -486,6 +469,83 @@ def _save_inst(console, inst) -> None:
         console.print("[green]salvo.[/]")
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]erro ao salvar:[/] {exc}")
+
+
+def _set_api_key(console, inst) -> None:
+    import questionary
+
+    from .engines import get_engine
+
+    names = get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]
+    key_name = names[0]
+    val = questionary.password(
+        f"{key_name} (vira secret cifrado da instância):", qmark="●", style=_style()
+    ).ask()
+    if val:
+        secrets.get_backend(inst).set(inst, key_name, val, True)
+        console.print(f"[green]{key_name} salvo (cifrado).[/]")
+    else:
+        console.print("[yellow]cancelado.[/]")
+
+
+def _edit_auth(console, name: str) -> None:
+    from . import engine_auth
+
+    while True:
+        inst = instances.load(name)
+        st = engine_auth.is_authenticated(inst)
+        status = (
+            "[green]logado[/]" if st is True
+            else "[yellow]não logado[/]" if st is False
+            else "[dim]via api-key (secret)[/]"
+        )
+        console.print(
+            f"[bold]auth de [cyan]{name}[/][/]  "
+            f"engine={inst.engine} · método={inst.engine_auth} · {status}"
+        )
+        first = "fazer login (isolado)" if inst.engine_auth == "subscription" else "definir / trocar api-key"
+        act = _select(
+            "Autenticação:",
+            choices=[
+                first,
+                "trocar método (subscription ↔ api-key)",
+                "deslogar / limpar dados",
+                _sep(), _back_choice(),
+            ],
+        )
+        if act is None or act == _BACK:
+            return
+        if act.startswith("fazer login"):
+            try:
+                console.print("[dim]abrindo login isolado… faça /login e depois saia (/exit).[/]")
+                engine_auth.login(inst)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]erro:[/] {exc}")
+        elif act.startswith("definir"):
+            _set_api_key(console, inst)
+        elif act.startswith("trocar método"):
+            val = _select("Novo método:", choices=["subscription", "api-key"])
+            if val and val != inst.engine_auth:
+                inst.engine_auth = val
+                _save_inst(console, inst)
+                if val == "api-key":
+                    _set_api_key(console, instances.load(name))
+                else:
+                    console.print(
+                        f"[dim]agora faça o login:[/] [bold]agenthook login {name}[/] "
+                        "[dim](ou 'fazer login' aqui).[/]"
+                    )
+        elif act.startswith("deslogar"):
+            if confirm(f"Deslogar {name!r} e apagar os dados de auth isolados?"):
+                wiped = engine_auth.logout(inst)
+                try:  # also drop the api-key secret, if any
+                    from .engines import get_engine
+
+                    for key in get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]:
+                        secrets.get_backend(inst).delete(inst, key)
+                except Exception:  # noqa: BLE001
+                    pass
+                console.print("[green]auth limpa.[/]" if wiped else "[dim]nada a limpar.[/]")
 
 
 def _edit_repos(console, name: str) -> None:

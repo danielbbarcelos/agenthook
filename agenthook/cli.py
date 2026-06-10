@@ -455,25 +455,19 @@ def login_cmd(name: str):
     Opens the engine pointed at ``~/.agenthook/auth/<instance>/`` — the host's
     own login (~/.claude) is never used. Run /login inside, then exit.
     """
-    import os
-
-    from .engines import get_engine
+    from . import engine_auth
 
     inst = _load(name)
-    engine = get_engine(inst.engine)
-    auth_dir = paths.auth_dir(inst.name) / engine.name
-    auth_dir.mkdir(parents=True, exist_ok=True)
-    argv = engine.login_argv(auth_dir)
-    if not argv:
-        _err(f"engine {engine.name!r} não tem login interativo; use auth=api-key.")
-    env = dict(os.environ)
-    env.update(engine.auth_config_env(inst, auth_dir))
+    try:
+        argv, _env = engine_auth.login_env(inst)
+    except RuntimeError as exc:
+        _err(str(exc))
     console.print(
         f"abrindo [cyan]{argv[0]}[/] isolado para [cyan]{name}[/]  "
-        f"[dim](config: {auth_dir})[/]\n"
+        f"[dim](config: {engine_auth.auth_dir_for(inst)})[/]\n"
         f"[yellow]→ faça /login nesta janela e depois saia (/exit).[/]\n"
     )
-    os.execvpe(argv[0], argv, env)
+    engine_auth.login(inst, exec_replace=True)
 
 
 @app.command("dry-run")

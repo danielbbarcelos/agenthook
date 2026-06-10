@@ -80,6 +80,11 @@ class Engine(abc.ABC):
         or None if this engine has no interactive login."""
         return None
 
+    def credential_files(self, auth_dir) -> list:
+        """Files under ``auth_dir`` whose presence means a login exists. Empty
+        when the engine isn't dir-credential based (e.g. pure api-key)."""
+        return []
+
     # ---- helpers ----------------------------------------------------------
 
     def supports(self, *, plan: bool = False, resume: bool = False, mcp: bool = False) -> bool:

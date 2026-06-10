@@ -63,6 +63,11 @@ class ClaudeEngine(Engine):
         # Interactive: the user runs /login inside, writing creds into auth_dir.
         return [self.binary]
 
+    def credential_files(self, auth_dir) -> list:
+        from pathlib import Path
+
+        return [Path(auth_dir) / ".credentials.json"]
+
     def parse_output(self, stdout, stderr, exit_code):
         result = Result(raw=stdout)
         final: dict | None = None
