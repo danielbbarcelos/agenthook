@@ -1,0 +1,531 @@
+"""Job runner — orchestrates a single job end to end (DESIGN.md §5, §17, §18, §20).
+
+Responsibilities: prepare an isolated workspace (git worktree + context file +
+MCP config + attachments + session volume), run the engine headlessly (in Docker
+by default, or directly for dev/test), normalize output, run the verification
+self-heal loop for code deliverables, apply the deliverable (patch/commit/PR),
+and finalize the job (usage, audit, callback) — with retries, the timeout kill
+and the per-instance circuit breaker.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+from . import git_ops, instances, secrets, store, templating, verify
+from .config import Config, load_config
+from .engines import Engine, RunSpec, get_engine
+from .errors import RETRY_ONCE, ClassifiedError, ErrorClass, InstancePaused
+from .instances import Instance
+from .models import Deliverable, Job, JobStatus, Mode, Result, Usage
+
+LogFn = Callable[[str], None]
+
+
+@dataclass
+class RunContext:
+    job: Job
+    inst: Instance
+    cfg: Config
+    engine: Engine
+    env_all: dict[str, str]
+    env_nonsecret: dict[str, str]
+    wt: Path | None = None
+    session_home: Path | None = None
+    prompt: str = ""
+    log_path: Path | None = None
+    _buffer: list[str] = field(default_factory=list)
+
+    def log(self, msg: str) -> None:
+        line = f"[{time.strftime('%H:%M:%S')}] {msg}"
+        self._buffer.append(line)
+        if self.log_path:
+            with self.log_path.open("a") as fh:
+                fh.write(line + "\n")
+
+
+# --- Public entry points ----------------------------------------------------
+
+
+def run_job(job: Job, *, log_cb: LogFn | None = None) -> Job:
+    inst = instances.load(job.instance)
+    if inst.paused:
+        raise InstancePaused(f"instance {inst.name!r} is paused: {inst.paused_reason}")
+
+    cfg = load_config()
+    engine = get_engine(inst.engine)
+    env_all = secrets.resolve_env(inst)
+    env_nonsecret = _nonsecret_env(inst)
+
+    ctx = RunContext(
+        job=job,
+        inst=inst,
+        cfg=cfg,
+        engine=engine,
+        env_all=env_all,
+        env_nonsecret=env_nonsecret,
+        log_path=_log_path(job),
+    )
+    if log_cb:
+        _orig = ctx.log
+
+        def _tee(m: str) -> None:
+            _orig(m)
+            log_cb(m)
+
+        ctx.log = _tee  # type: ignore[method-assign]
+
+    job.status = JobStatus.RUNNING
+    job.started_at = time.time()
+    store.save_job(job)
+
+    try:
+        _validate_auth(ctx)
+        _prepare_workspace(ctx)
+        _execute_with_retries(ctx)
+    except InstancePaused:
+        raise
+    except Exception as exc:  # noqa: BLE001 - last-resort guard
+        ctx.log(f"runner error: {exc}")
+        job.status = JobStatus.ERROR
+        job.error_class = ErrorClass.UNKNOWN.value
+        job.error_message = str(exc)
+    finally:
+        _finalize(ctx)
+    return job
+
+
+def dry_run(job: Job) -> dict:
+    """Render everything that *would* run, without executing (DESIGN.md §32)."""
+    inst = instances.load(job.instance)
+    engine = get_engine(inst.engine)
+    try:
+        env_all = secrets.resolve_env(inst)
+    except Exception:
+        env_all = {}
+    env_nonsecret = _nonsecret_env(inst)
+    context = templating.build_context(job.request, env_nonsecret)
+    prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
+    spec = _build_runspec(inst, engine, job, prompt, resume_id=None, sandbox=inst is not None)
+    masked = {k: secrets.obfuscate(v) for k, v in env_all.items()}
+    return {
+        "instance": inst.name,
+        "engine": engine.name,
+        "deliverable": job.deliverable.value,
+        "mode": job.mode.value,
+        "prompt": prompt,
+        "context_file": {
+            "name": engine.context_filename,
+            "body": templating.render_context_file(inst, context),
+        },
+        "argv": spec,
+        "env": masked,
+        "mcp": templating.render_mcp(inst, {k: "***" for k in env_all}),
+        "guardrails": _guardrails(inst, job.deliverable),
+        "auth_env_required": engine.auth_env_names(inst),
+    }
+
+
+# --- Workspace & execution --------------------------------------------------
+
+
+def _prepare_workspace(ctx: RunContext) -> None:
+    job, inst, engine = ctx.job, ctx.inst, ctx.engine
+    context = templating.build_context(job.request, ctx.env_nonsecret)
+    ctx.prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
+    job.prompt = ctx.prompt
+
+    if inst.repo:
+        ctx.wt = git_ops.create_worktree(inst, job.id, job.request.get("branch_base"))
+    else:
+        ctx.wt = _empty_workdir(job.id)
+    job.workdir = str(ctx.wt)
+    ctx.log(f"workspace: {ctx.wt}")
+
+    # Context file (CLAUDE.md / AGENTS.md / …).
+    body = templating.render_context_file(inst, context)
+    if body:
+        (ctx.wt / engine.context_filename).write_text(body)
+        ctx.log(f"wrote context file {engine.context_filename}")
+
+    # MCP config.
+    if inst.mcp and engine.capabilities.mcp:
+        mcp = templating.render_mcp(inst, ctx.env_all)
+        (ctx.wt / ".mcp.json").write_text(json.dumps(mcp, indent=2))
+        ctx.log("wrote .mcp.json")
+
+    # Attachments.
+    _write_attachments(ctx, job.request.get("attachments") or [])
+
+    # Session volume (engine state persisted across turns).
+    if job.session_id:
+        from . import paths
+
+        ctx.session_home = paths.sessions_dir() / job.session_id
+        ctx.session_home.mkdir(parents=True, exist_ok=True)
+
+
+def _execute_with_retries(ctx: RunContext) -> None:
+    job, inst = ctx.job, ctx.inst
+    retry_cfg = inst.limits.get("retry", {}) if isinstance(inst.limits, dict) else {}
+    max_attempts = int(retry_cfg.get("max_attempts", 3))
+
+    session = store.get_session(job.session_id) if job.session_id else None
+    resume_id = session.engine_session_id if session else None
+
+    while True:
+        job.attempts += 1
+        result, err, raw = _run_engine(ctx, ctx.prompt, resume_id)
+        job.usage = job.usage.add(result.usage)
+
+        if err is None:
+            job.result = result
+            _on_engine_success(ctx, result, session)
+            return
+
+        ctx.log(f"engine error: {err.error_class.value}: {err.message}")
+        cap = 1 if err.error_class in RETRY_ONCE else max_attempts
+        if err.retryable and job.attempts < cap:
+            delay = err.retry_after or min(2 ** job.attempts, 30)
+            ctx.log(f"retrying in {delay:.0f}s (attempt {job.attempts}/{cap})")
+            time.sleep(delay)
+            continue
+
+        _on_engine_error(ctx, err, result)
+        return
+
+
+def _on_engine_success(ctx: RunContext, result: Result, session) -> None:
+    job, inst = ctx.job, ctx.inst
+
+    if session is not None and result.session_id:
+        session.engine_session_id = result.session_id
+        session.job_count += 1
+        store.save_session(session)
+
+    # Plan mode on a code deliverable parks for approval (DESIGN.md §19).
+    if job.mode is Mode.PLAN and job.deliverable.mutates_code:
+        result.is_plan = True
+        job.status = JobStatus.AWAITING_APPROVAL
+        ctx.log("plan produced; awaiting approval")
+        return
+
+    # Verification self-heal for code deliverables (DESIGN.md §18).
+    if job.deliverable.mutates_code and inst.verify.get("checks") and ctx.wt:
+        outcome = verify.run(
+            inst,
+            exec_cmd=lambda cmd: _exec_shell(ctx, cmd),
+            run_fix=lambda p: _run_fix(ctx, p, session),
+            log=ctx.log,
+        )
+        job.usage = job.usage.add(outcome.usage)
+        gate = inst.verify.get("gate", True)
+        if outcome.ran and not outcome.passed and gate:
+            job.status = JobStatus.FAILED_CHECKS
+            job.error_message = "verification checks failed"
+            ctx.log("verification failed; gate blocks deliverable")
+            return
+
+    _apply_deliverable(ctx)
+    job.status = JobStatus.SUCCESS
+
+
+def _on_engine_error(ctx: RunContext, err: ClassifiedError, result: Result) -> None:
+    job, inst = ctx.job, ctx.inst
+    job.error_class = err.error_class.value
+    job.error_message = err.message
+    job.result = result
+    status_map = {
+        ErrorClass.BLOCKED: JobStatus.BLOCKED,
+        ErrorClass.TIMEOUT: JobStatus.TIMEOUT,
+    }
+    job.status = status_map.get(err.error_class, JobStatus.ERROR)
+
+    if err.breaks_circuit:
+        instances.set_paused(inst.name, True, f"{err.error_class.value}: {err.message}")
+        ctx.log(f"circuit breaker: instance {inst.name!r} paused")
+
+
+def _run_fix(ctx: RunContext, prompt: str, session) -> Usage:
+    """Re-run the engine with a fix prompt for the verification loop."""
+    resume_id = session.engine_session_id if (session and ctx.engine.capabilities.resume) else None
+    result, _err, _raw = _run_engine(ctx, prompt, resume_id, mode=Mode.AUTO)
+    if session is not None and result.session_id:
+        session.engine_session_id = result.session_id
+        store.save_session(session)
+    return result.usage
+
+
+def _run_engine(
+    ctx: RunContext, prompt: str, resume_id: str | None, mode: Mode | None = None
+) -> tuple[Result, ClassifiedError | None, str]:
+    spec = _build_runspec(
+        ctx.inst, ctx.engine, ctx.job, prompt, resume_id, sandbox=ctx.cfg.use_docker, mode=mode
+    )
+    timeout = ctx.inst.limits.get("timeout") if isinstance(ctx.inst.limits, dict) else None
+    code, out, errtext = _exec(ctx, spec, timeout=timeout)
+    if code == _TIMEOUT_CODE:
+        return Result(raw=out), ClassifiedError(ErrorClass.TIMEOUT, "wall-clock timeout"), out
+    result, err = ctx.engine.parse_output(out, errtext, code)
+    return result, err, out
+
+
+def _build_runspec(
+    inst: Instance,
+    engine: Engine,
+    job: Job,
+    prompt: str,
+    resume_id: str | None,
+    *,
+    sandbox: bool,
+    mode: Mode | None = None,
+) -> list[str]:
+    disallowed = list(inst.limits.get("disallowed_tools", []) if isinstance(inst.limits, dict) else [])
+    allowed = list(inst.limits.get("allowed_tools", []) if isinstance(inst.limits, dict) else [])
+    if job.deliverable.read_only:
+        disallowed = sorted(set(disallowed) | set(engine.read_only_disallowed_tools()))
+    spec = RunSpec(
+        prompt=prompt,
+        mode=mode or job.mode,
+        deliverable=job.deliverable,
+        model=inst.model,
+        max_turns=inst.limits.get("max_turns") if isinstance(inst.limits, dict) else None,
+        allowed_tools=allowed,
+        disallowed_tools=disallowed,
+        resume_session_id=resume_id if engine.capabilities.resume else None,
+        sandbox=sandbox,
+    )
+    return engine.build_argv(spec)
+
+
+# --- Low-level execution (docker or local) ----------------------------------
+
+_TIMEOUT_CODE = 124
+
+
+def _exec(ctx: RunContext, argv: list[str], *, timeout: float | None = None) -> tuple[int, str, str]:
+    if ctx.cfg.use_docker:
+        argv = _docker_wrap(ctx, argv)
+    ctx.log("exec: " + " ".join(argv[:6]) + (" …" if len(argv) > 6 else ""))
+    env = _process_env(ctx)
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(ctx.wt) if ctx.wt else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return _TIMEOUT_CODE, "", "timeout"
+    except FileNotFoundError as exc:
+        return 127, "", f"executable not found: {exc}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _exec_shell(ctx: RunContext, cmd: str) -> tuple[int, str]:
+    """Run a verify check command inside the workspace."""
+    if ctx.cfg.use_docker:
+        argv = _docker_wrap(ctx, ["sh", "-lc", cmd])
+    else:
+        argv = ["sh", "-lc", cmd]
+    proc = subprocess.run(
+        argv,
+        cwd=str(ctx.wt) if ctx.wt else None,
+        env=_process_env(ctx),
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, (proc.stdout + proc.stderr)
+
+
+def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
+    cmd = ["docker", "run", "--rm", "-i"]
+    ro = ":ro" if ctx.job.deliverable.read_only else ""
+    cmd += ["-v", f"{ctx.wt}:/workspace{ro}", "-w", "/workspace"]
+    if ctx.session_home:
+        cmd += ["-v", f"{ctx.session_home}:/root", "-e", "HOME=/root"]
+    for k, v in ctx.env_all.items():
+        cmd += ["-e", f"{k}={v}"]
+    limits = ctx.inst.limits if isinstance(ctx.inst.limits, dict) else {}
+    if limits.get("cpus"):
+        cmd += ["--cpus", str(limits["cpus"])]
+    if limits.get("memory"):
+        cmd += ["--memory", str(limits["memory"])]
+    cmd.append(ctx.cfg.docker_image)
+    cmd += argv
+    return cmd
+
+
+def _process_env(ctx: RunContext) -> dict[str, str]:
+    import os
+
+    env = dict(os.environ)
+    env.update(ctx.env_all)
+    if ctx.session_home and not ctx.cfg.use_docker:
+        env["HOME"] = str(ctx.session_home)
+    return env
+
+
+# --- Deliverable application ------------------------------------------------
+
+
+def _apply_deliverable(ctx: RunContext) -> None:
+    job, inst = ctx.job, ctx.inst
+    d = job.deliverable
+    if d.read_only or not ctx.wt:
+        return
+    if not git_ops.has_changes(ctx.wt):
+        ctx.log("no changes produced by the agent")
+        return
+
+    branch = inst.pr_branch.format(id=job.id)
+    base = job.request.get("branch_base") or inst.branch_base
+    msg = _commit_message(job)
+
+    if d is Deliverable.PATCH:
+        diff = git_ops.diff(ctx.wt)
+        patch_path = ctx.wt / "changes.diff"
+        patch_path.write_text(diff)
+        job.metadata["patch"] = str(patch_path)
+        ctx.log(f"patch written: {patch_path}")
+        return
+
+    git_ops.commit_branch(ctx.wt, branch, msg)
+    git_ops.push(ctx.wt, branch, env=_process_env(ctx))
+    ctx.log(f"pushed branch {branch}")
+    if d is Deliverable.PR:
+        url = git_ops.open_pr(
+            ctx.wt, base=base, title=_pr_title(job), body=job.result.text if job.result else "",
+            env=_process_env(ctx),
+        )
+        job.pr_url = url.strip().splitlines()[-1] if url else None
+        ctx.log(f"opened PR: {job.pr_url}")
+
+
+def _commit_message(job: Job) -> str:
+    rtype = (job.request or {}).get("request_type", "task")
+    return f"agenthook: {rtype} {job.id}\n\n{(job.prompt or '')[:200]}"
+
+
+def _pr_title(job: Job) -> str:
+    subj = (job.request or {}).get("subject_ref", {})
+    if subj.get("ticket_id"):
+        return f"agenthook: {job.request.get('request_type', 'task')} #{subj['ticket_id']}"
+    return f"agenthook: {job.id}"
+
+
+# --- Finalization -----------------------------------------------------------
+
+
+def _finalize(ctx: RunContext) -> None:
+    job = ctx.job
+    job.finished_at = time.time()
+    store.save_job(job)
+
+    retention = ctx.cfg.retention
+    prompt_full = output_full = None
+    if retention == "full":
+        prompt_full = job.prompt
+        output_full = job.result.text if job.result else None
+    elif retention == "truncated":
+        n = ctx.cfg.truncate_chars
+        prompt_full = (job.prompt or "")[:n]
+        output_full = (job.result.text if job.result else "")[:n]
+    store.record_audit(job, prompt_full=prompt_full, output_full=output_full)
+
+    # Cleanup the ephemeral worktree (session volume is kept).
+    if ctx.wt and ctx.inst.repo and (ctx.wt.parent.name == "work"):
+        try:
+            git_ops.remove_worktree(ctx.inst, ctx.wt)
+        except Exception:  # noqa: BLE001
+            pass
+
+    from .results import deliver_callbacks
+
+    try:
+        deliver_callbacks(job, ctx.inst)
+    except Exception as exc:  # noqa: BLE001
+        ctx.log(f"callback error: {exc}")
+
+
+# --- helpers ----------------------------------------------------------------
+
+
+def _validate_auth(ctx: RunContext) -> None:
+    if ctx.inst.engine_auth != "api-key":
+        return
+    required = ctx.engine.auth_env_names(ctx.inst)
+    missing = [k for k in required if not ctx.env_all.get(k)]
+    if missing:
+        instances.set_paused(ctx.inst.name, True, f"missing auth env: {', '.join(missing)}")
+        raise InstancePaused(
+            f"instance {ctx.inst.name!r} missing auth env {missing}; paused"
+        )
+
+
+def _nonsecret_env(inst: Instance) -> dict[str, str]:
+    try:
+        backend = secrets.get_backend(inst)
+        return {ev.name: ev.value for ev in backend.items(inst) if not ev.secret}
+    except Exception:
+        return {}
+
+
+def _empty_workdir(job_id: str) -> Path:
+    from . import paths
+
+    d = paths.work_dir() / job_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _log_path(job: Job) -> Path:
+    from . import paths
+
+    return paths.job_log(job.instance, job.id)
+
+
+def _write_attachments(ctx: RunContext, attachments: list[dict]) -> None:
+    if not attachments or not ctx.wt:
+        return
+    import base64
+
+    adir = ctx.wt / ".agenthook" / "attachments"
+    adir.mkdir(parents=True, exist_ok=True)
+    max_bytes = ctx.cfg.attachment_max_mb * 1024 * 1024
+    for att in attachments:
+        name = att.get("name", "attachment")
+        target = adir / Path(name).name
+        if att.get("inline_b64"):
+            data = base64.b64decode(att["inline_b64"])
+            if len(data) > max_bytes:
+                ctx.log(f"attachment {name} too large; skipped")
+                continue
+            target.write_bytes(data)
+        elif att.get("url"):
+            try:
+                import httpx
+
+                r = httpx.get(att["url"], headers=att.get("headers", {}), timeout=30)
+                r.raise_for_status()
+                target.write_bytes(r.content)
+            except Exception as exc:  # noqa: BLE001
+                ctx.log(f"attachment {name} download failed: {exc}")
+                continue
+        ctx.log(f"attachment saved: {target.name}")
+
+
+def _guardrails(inst: Instance, deliverable: Deliverable) -> dict:
+    return {
+        "read_only": deliverable.read_only,
+        "mutates_code": deliverable.mutates_code,
+        "verify_gate": bool(inst.verify.get("checks")) and inst.verify.get("gate", True),
+        "allow_overrides": inst.allow_overrides,
+    }

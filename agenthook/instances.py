@@ -1,0 +1,131 @@
+"""Instance registry — persisted as YAML (DESIGN.md §2, §3).
+
+An *instance* is the reusable configuration that ties a repository (optional),
+an engine, auth, a default deliverable and assorted sub-blocks (verify, mcp,
+schedules) together. Instances live at
+``~/.agenthook/instances/<name>/instance.yaml``; their encrypted env lives next
+to it (see :mod:`agenthook.secrets`).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+import yaml
+
+from . import paths
+
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+class InstanceError(Exception):
+    pass
+
+
+@dataclass
+class Instance:
+    name: str
+    engine: str = "claude"
+    repo: str | None = None
+    branch_base: str = "main"
+    engine_auth: str = "api-key"  # api-key | subscription
+    webhook_auth: dict[str, Any] = field(default_factory=dict)  # §12
+    model: str | None = None
+    default_prompt: str | None = None
+    deliverable: str = "analysis"
+    on_result: list[str] = field(default_factory=lambda: ["logs"])
+    callback_url: str | None = None
+    pr_branch: str = "agenthook/job-{id}"
+    allow_overrides: list[str] = field(default_factory=list)
+    limits: dict[str, Any] = field(default_factory=dict)  # timeout, max_turns, concurrency, retry
+    verify: dict[str, Any] = field(default_factory=dict)  # §18
+    mcp: dict[str, Any] = field(default_factory=dict)  # §25
+    schedules: list[dict[str, Any]] = field(default_factory=list)  # §28
+    secrets_backend: str = "local-encrypted"  # §27
+    context_template: str | None = None  # §13 (inline template body)
+    templates: dict[str, str] = field(default_factory=dict)  # §14, request_type -> body
+    paused: bool = False  # circuit breaker (§17)
+    paused_reason: str | None = None
+    key_fingerprint: str | None = None
+
+    # ---- validation / convenience ----------------------------------------
+
+    def validate(self) -> None:
+        if not _NAME_RE.match(self.name):
+            raise InstanceError(
+                f"invalid instance name {self.name!r}: use lowercase letters, digits, '-' or '_'"
+            )
+        from .models import Deliverable, Mode  # local import to avoid cycle
+
+        if self.deliverable not in {d.value for d in Deliverable}:
+            raise InstanceError(f"unknown deliverable {self.deliverable!r}")
+        if self.engine_auth not in {"api-key", "subscription"}:
+            raise InstanceError(f"unknown engine_auth {self.engine_auth!r}")
+        mode = self.limits.get("mode")
+        if mode and mode not in {m.value for m in Mode}:
+            raise InstanceError(f"unknown default mode {mode!r}")
+
+    @property
+    def default_mode(self) -> str:
+        return self.limits.get("mode", "default")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Instance":
+        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+
+# --- Persistence ------------------------------------------------------------
+
+
+def _path(name: str):
+    return paths.instance_dir(name) / "instance.yaml"
+
+
+def exists(name: str) -> bool:
+    return _path(name).exists()
+
+
+def save(inst: Instance) -> None:
+    inst.validate()
+    d = paths.instance_dir(inst.name)
+    d.mkdir(parents=True, exist_ok=True)
+    _path(inst.name).write_text(yaml.safe_dump(inst.to_dict(), sort_keys=False, allow_unicode=True))
+
+
+def load(name: str) -> Instance:
+    p = _path(name)
+    if not p.exists():
+        raise InstanceError(f"instance {name!r} not found")
+    data = yaml.safe_load(p.read_text()) or {}
+    return Instance.from_dict(data)
+
+
+def list_names() -> list[str]:
+    base = paths.instances_dir()
+    return sorted(d.name for d in base.iterdir() if (d / "instance.yaml").exists())
+
+
+def list_all() -> list[Instance]:
+    return [load(n) for n in list_names()]
+
+
+def delete(name: str) -> None:
+    import shutil
+
+    d = paths.instance_dir(name)
+    if not d.exists():
+        raise InstanceError(f"instance {name!r} not found")
+    shutil.rmtree(d)
+
+
+def set_paused(name: str, paused: bool, reason: str | None = None) -> None:
+    inst = load(name)
+    inst.paused = paused
+    inst.paused_reason = reason if paused else None
+    save(inst)
