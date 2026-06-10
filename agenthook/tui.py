@@ -1,19 +1,38 @@
-"""Friendly interactive layer — arrow-key pickers and a simple menu (DESIGN.md §23).
+"""Friendly interactive layer — a persistent, guided menu (DESIGN.md §23).
 
-Kept thin and optional: every flow also works non-interactively. The live
-Textual dashboard is intentionally left for a later phase; these questionary
-pickers deliver most of the "friendly" feel at a fraction of the cost.
+Running ``agenthook`` with no subcommand drops into this menu: a banner +
+arrow-key navigation that stays alive until the user picks *Sair* or presses
+Ctrl+C twice. Every flow here also has a non-interactive CLI equivalent; the
+menu just makes the common CRUD friendly. It talks to ``instances`` / ``secrets``
+/ ``store`` directly (never to Typer commands, whose defaults are OptionInfo
+sentinels when called in-process).
 """
 
 from __future__ import annotations
 
 import sys
 
-from . import instances, store
+from . import instances, secrets, store
+
+# Sentinel strings reused across menus.
+_BACK = "⬅  voltar"
+_QUIT = "❌  sair"
 
 
 def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("agenthook")
+    except Exception:  # noqa: BLE001
+        return "dev"
+
+
+# --- Reusable pickers (used by the CLI too) ---------------------------------
 
 
 def pick_instance() -> str:
@@ -48,6 +67,49 @@ def confirm(prompt: str) -> bool:
     return bool(questionary.confirm(prompt, default=False).ask())
 
 
+# --- Banner ------------------------------------------------------------------
+
+
+def _banner(console) -> None:
+    from rich.align import Align
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console.clear()
+    try:
+        n_inst = len(instances.list_names())
+    except Exception:  # noqa: BLE001
+        n_inst = 0
+    try:
+        n_jobs = len(store.list_jobs(limit=100000))
+    except Exception:  # noqa: BLE001
+        n_jobs = 0
+
+    body = Text()
+    body.append("✻ ", style="bold magenta")
+    body.append("agenthook", style="bold cyan")
+    body.append(f"  v{_version()}\n", style="dim")
+    body.append("Runner de tarefas agênticas — multi-engine, self-hosted.\n\n", style="white")
+    body.append(f"  {n_inst} instância(s)  ·  {n_jobs} job(s)\n", style="green")
+    body.append("\n  ↑↓ navegar   ·   Enter selecionar   ·   Ctrl+C 2× para sair", style="dim italic")
+    console.print(Panel(Align.left(body), border_style="cyan", padding=(1, 3)))
+
+
+def _pause(console) -> None:
+    import questionary
+
+    questionary.press_any_key_to_continue("  ↵  Enter para voltar ao menu…").ask()
+
+
+def _select(message: str, choices: list):
+    import questionary
+
+    return questionary.select(message, choices=choices, qmark="›").ask()
+
+
+# --- Main loop ---------------------------------------------------------------
+
+
 def main_menu() -> None:
     from rich.console import Console
 
@@ -55,27 +117,398 @@ def main_menu() -> None:
     if not _interactive():
         console.print("agenthook — run `agenthook --help` for commands.")
         return
-    import questionary
 
-    action = questionary.select(
-        "agenthook — what would you like to do?",
-        choices=["list instances", "list jobs", "list sessions", "quit"],
-    ).ask()
+    _banner(console)
+    interrupts = 0
+    while True:
+        choice = _select(
+            "O que deseja fazer?",
+            choices=["📦  instâncias", "🧰  jobs", "🧵  sessões", _QUIT],
+        )
+        if choice is None:  # Ctrl+C on the top menu
+            interrupts += 1
+            if interrupts >= 2:
+                break
+            console.print("[dim]Ctrl+C de novo para sair, ou escolha uma opção.[/]")
+            continue
+        interrupts = 0
+        if choice == _QUIT:
+            break
+        if choice.endswith("instâncias"):
+            _instances_menu(console)
+        elif choice.endswith("jobs"):
+            console.clear()
+            _show_jobs(console)
+            _pause(console)
+        elif choice.endswith("sessões"):
+            console.clear()
+            _show_sessions(console)
+            _pause(console)
+        _banner(console)
+
+    console.print("até logo 👋")
+
+
+# --- Instances submenu -------------------------------------------------------
+
+
+def _instances_menu(console) -> None:
+    console.clear()
+    while True:
+        choice = _select(
+            "Instâncias — o que deseja?",
+            choices=[
+                "➕  adicionar",
+                "👁   ver detalhes",
+                "✏️   editar",
+                "🗑   excluir",
+                "📋  listar",
+                _BACK,
+            ],
+        )
+        if choice is None or choice == _BACK:
+            return
+        console.clear()
+        if choice.endswith("adicionar"):
+            _instance_add(console)
+        elif choice.endswith("ver detalhes"):
+            _instance_view(console)
+        elif choice.endswith("editar"):
+            _instance_edit(console)
+        elif choice.endswith("excluir"):
+            _instance_delete(console)
+        elif choice.endswith("listar"):
+            _show_instances(console)
+        _pause(console)
+        console.clear()
+
+
+def _pick_instance_or_none(console, prompt: str = "Qual instância?"):
+    names = instances.list_names()
+    if not names:
+        console.print("[yellow]nenhuma instância ainda.[/]")
+        return None
+    return _select(prompt, choices=names + [_BACK])
+
+
+def _instance_add(console) -> None:
+    import questionary
+    from rich.panel import Panel
+
+    from .instances import Instance, _derive_repo_name
+
+    name = questionary.text("Nome da instância (slug):", qmark="›").ask()
+    if not name:
+        return
+    if instances.exists(name):
+        console.print(f"[red]instância {name!r} já existe.[/]")
+        return
+
+    from .engines import available as engines_available
+    from .models import Deliverable
+
+    engine = _select("Engine:", choices=engines_available() or ["claude"])
+    if engine is None:
+        return
+    engine_auth = _select("Auth do engine:", choices=["api-key", "subscription"])
+    if engine_auth is None:
+        return
+    deliverable = _select("Deliverable padrão:", choices=[d.value for d in Deliverable])
+    if deliverable is None:
+        return
+    model = questionary.text("Modelo (opcional, Enter p/ pular):", qmark="›").ask() or None
+    branch = questionary.text("Branch base:", default="main", qmark="›").ask() or "main"
+
+    repos: list[dict] = []
+    while questionary.confirm(
+        f"Adicionar repositório ao pool? ({len(repos)} já)", default=False, qmark="›"
+    ).ask():
+        spec = questionary.text("repo (name=url ou url):", qmark="›").ask()
+        if not spec:
+            break
+        if "=" in spec:
+            rname, url = spec.split("=", 1)
+            repos.append({"name": rname.strip(), "url": url.strip()})
+        else:
+            repos.append({"name": _derive_repo_name(spec), "url": spec.strip()})
+
+    inst = Instance(
+        name=name,
+        engine=engine,
+        engine_auth=engine_auth,
+        deliverable=deliverable,
+        model=model,
+        branch_base=branch,
+        repos=repos,
+    )
+    try:
+        instances.save(inst)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]erro:[/] {exc}")
+        return
+    key, fp = secrets.generate_key(inst)
+    inst.key_fingerprint = fp
+    instances.save(inst)
+    console.print(
+        Panel(
+            f"[bold]Instância [cyan]{name}[/] criada.[/]\n\n"
+            f"[yellow]Chave de criptografia (mostrada UMA vez — guarde com segurança):[/]\n"
+            f"[bold]{key}[/]\n\nfingerprint: {fp}",
+            title="🔐 guarde esta chave",
+            border_style="yellow",
+        )
+    )
+
+
+def _instance_view(console) -> None:
+    import json
 
     from rich.table import Table
 
-    if action == "list instances":
-        t = Table("name", "engine", "deliverable", "paused")
-        for inst in instances.list_all():
-            t.add_row(inst.name, inst.engine, inst.deliverable, "yes" if inst.paused else "no")
-        console.print(t)
-    elif action == "list jobs":
-        t = Table("job", "instance", "status")
-        for j in store.list_jobs(limit=20):
-            t.add_row(j.id, j.instance, j.status.value)
-        console.print(t)
-    elif action == "list sessions":
-        t = Table("session", "instance", "thread_key", "jobs")
-        for s in store.list_sessions():
-            t.add_row(s.id, s.instance, s.thread_key, str(s.job_count))
-        console.print(t)
+    name = _pick_instance_or_none(console, "Ver qual instância?")
+    if not name or name == _BACK:
+        return
+    inst = instances.load(name)
+
+    info = Table("campo", "valor", title=f"instância: {name}", title_style="bold cyan")
+    info.add_row("engine", inst.engine)
+    info.add_row("engine_auth", inst.engine_auth)
+    info.add_row("deliverable", inst.deliverable)
+    info.add_row("model", inst.model or "-")
+    info.add_row("branch_base", inst.branch_base)
+    info.add_row("paused", "[red]sim[/]" if inst.paused else "não")
+    console.print(info)
+
+    repos = inst.resolved_repos()
+    if repos:
+        rt = Table("repo", "url", "branch_base", title="pool de repositórios")
+        for r in repos:
+            rt.add_row(r.name, r.url, r.branch_base)
+        console.print(rt)
+    else:
+        console.print("[dim]sem repositórios no pool.[/]")
+
+    try:
+        items = secrets.get_backend(inst).items(inst)
+    except Exception:  # noqa: BLE001
+        items = []
+    if items:
+        et = Table("env", "valor", "secret", title="variáveis de ambiente")
+        for ev in items:
+            shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
+            et.add_row(ev.name, shown, "sim" if ev.secret else "não")
+        console.print(et)
+
+    jobs = [j for j in store.list_jobs(limit=50) if j.instance == name][:8]
+    if jobs:
+        jt = Table("job", "status", "deliverable", title="jobs recentes")
+        for j in jobs:
+            jt.add_row(j.id, j.status.value, j.deliverable.value)
+        console.print(jt)
+    if not (repos or items or jobs):
+        console.print(f"[dim]{json.dumps(inst.to_dict(), default=str)}[/]")
+
+
+def _instance_delete(console) -> None:
+    name = _pick_instance_or_none(console, "Excluir qual instância?")
+    if not name or name == _BACK:
+        return
+    if not confirm(f"Excluir {name!r} e seus segredos? Isso é irreversível."):
+        console.print("cancelado.")
+        return
+    instances.delete(name)
+    console.print(f"[green]excluída[/] {name}")
+
+
+# --- Instance edit -----------------------------------------------------------
+
+
+def _instance_edit(console) -> None:
+    name = _pick_instance_or_none(console, "Editar qual instância?")
+    if not name or name == _BACK:
+        return
+    while True:
+        console.clear()
+        inst = instances.load(name)
+        console.print(f"[bold]Editando [cyan]{name}[/][/]  "
+                      f"(engine={inst.engine}, deliverable={inst.deliverable}, "
+                      f"repos={len(inst.resolved_repos())}, "
+                      f"{'[red]pausada[/]' if inst.paused else 'ativa'})")
+        field = _select(
+            "Qual campo?",
+            choices=[
+                "deliverable", "engine", "model", "branch base",
+                "repos (pool)", "variáveis de ambiente",
+                "pausar / retomar", _BACK,
+            ],
+        )
+        if field is None or field == _BACK:
+            return
+        if field == "deliverable":
+            from .models import Deliverable
+
+            val = _select("Novo deliverable:", choices=[d.value for d in Deliverable])
+            if val:
+                inst.deliverable = val
+                _save_inst(console, inst)
+        elif field == "engine":
+            from .engines import available as engines_available
+
+            val = _select("Novo engine:", choices=engines_available() or ["claude"])
+            if val:
+                inst.engine = val
+                _save_inst(console, inst)
+        elif field == "model":
+            import questionary
+
+            val = questionary.text("Modelo (vazio = nenhum):",
+                                   default=inst.model or "", qmark="›").ask()
+            inst.model = val or None
+            _save_inst(console, inst)
+        elif field == "branch base":
+            import questionary
+
+            val = questionary.text("Branch base:", default=inst.branch_base, qmark="›").ask()
+            if val:
+                inst.branch_base = val
+                _save_inst(console, inst)
+        elif field == "repos (pool)":
+            _edit_repos(console, name)
+        elif field == "variáveis de ambiente":
+            _edit_env(console, name)
+        elif field.startswith("pausar"):
+            instances.set_paused(name, not inst.paused,
+                                 "pausada manualmente" if not inst.paused else None)
+            console.print("[green]ok[/]")
+            _pause(console)
+
+
+def _save_inst(console, inst) -> None:
+    try:
+        instances.save(inst)
+        console.print("[green]salvo.[/]")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]erro ao salvar:[/] {exc}")
+    _pause(console)
+
+
+def _edit_repos(console, name: str) -> None:
+    import questionary
+    from rich.table import Table
+
+    from .instances import _derive_repo_name
+
+    while True:
+        console.clear()
+        inst = instances.load(name)
+        repos = inst.resolved_repos()
+        t = Table("repo", "url", "branch_base", title=f"pool de {name}")
+        for r in repos:
+            t.add_row(r.name, r.url, r.branch_base)
+        console.print(t if repos else "[dim]pool vazio.[/]")
+        act = _select("Repositórios:", choices=["➕  adicionar", "🗑   remover", _BACK])
+        if act is None or act == _BACK:
+            return
+        if act.endswith("adicionar"):
+            spec = questionary.text("repo (name=url ou url):", qmark="›").ask()
+            if not spec:
+                continue
+            if "=" in spec:
+                rname, url = spec.split("=", 1)
+                entry = {"name": rname.strip(), "url": url.strip()}
+            else:
+                entry = {"name": _derive_repo_name(spec), "url": spec.strip()}
+            branch = questionary.text("branch base (vazio = herda):", qmark="›").ask()
+            if branch:
+                entry["branch_base"] = branch
+            if entry["name"] in inst.repo_names():
+                console.print(f"[red]repo {entry['name']!r} já existe no pool.[/]")
+                _pause(console)
+                continue
+            # migrate a legacy single repo into the pool transparently
+            if inst.repo and not inst.repos:
+                inst.repos = [{"name": _derive_repo_name(inst.repo), "url": inst.repo}]
+                inst.repo = None
+            inst.repos.append(entry)
+            _save_inst(console, inst)
+        elif act.endswith("remover"):
+            if not repos:
+                continue
+            target = _select("Remover qual?", choices=[r.name for r in repos] + [_BACK])
+            if not target or target == _BACK:
+                continue
+            inst.repos = [
+                r for r in inst.repos
+                if (r.get("name") or _derive_repo_name(r["url"])) != target
+            ]
+            _save_inst(console, inst)
+
+
+def _edit_env(console, name: str) -> None:
+    import questionary
+    from rich.table import Table
+
+    while True:
+        console.clear()
+        inst = instances.load(name)
+        backend = secrets.get_backend(inst)
+        items = backend.items(inst)
+        t = Table("env", "valor", "secret", title=f"env de {name}")
+        for ev in items:
+            shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
+            t.add_row(ev.name, shown, "sim" if ev.secret else "não")
+        console.print(t if items else "[dim]sem variáveis.[/]")
+        act = _select("Variáveis de ambiente:", choices=["➕  definir", "🗑   remover", _BACK])
+        if act is None or act == _BACK:
+            return
+        if act.endswith("definir"):
+            key = questionary.text("Nome (KEY):", qmark="›").ask()
+            if not key:
+                continue
+            value = questionary.text("Valor:", qmark="›").ask() or ""
+            is_secret = bool(questionary.confirm("É secret (ofuscar)?", default=True, qmark="›").ask())
+            backend.set(inst, key, value, is_secret)
+            console.print(f"[green]definida[/] {key}{' (secret)' if is_secret else ''}")
+            _pause(console)
+        elif act.endswith("remover"):
+            if not items:
+                continue
+            target = _select("Remover qual?", choices=[ev.name for ev in items] + [_BACK])
+            if not target or target == _BACK:
+                continue
+            backend.delete(inst, target)
+            console.print(f"[green]removida[/] {target}")
+            _pause(console)
+
+
+# --- Listings ----------------------------------------------------------------
+
+
+def _show_instances(console) -> None:
+    from rich.table import Table
+
+    t = Table("name", "engine", "deliverable", "repos", "paused")
+    for inst in instances.list_all():
+        names = inst.repo_names()
+        t.add_row(inst.name, inst.engine, inst.deliverable,
+                  ", ".join(names) if names else "-",
+                  "[red]sim[/]" if inst.paused else "não")
+    console.print(t)
+
+
+def _show_jobs(console) -> None:
+    from rich.table import Table
+
+    t = Table("job", "instance", "status", "deliverable")
+    for j in store.list_jobs(limit=20):
+        t.add_row(j.id, j.instance, j.status.value, j.deliverable.value)
+    console.print(t)
+
+
+def _show_sessions(console) -> None:
+    from rich.table import Table
+
+    t = Table("session", "instance", "thread_key", "jobs")
+    for s in store.list_sessions():
+        t.add_row(s.id, s.instance, s.thread_key, str(s.job_count))
+    console.print(t)
