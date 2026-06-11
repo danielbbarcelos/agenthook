@@ -1077,6 +1077,11 @@ def _instance_edit(console) -> None:
                     "paused — resume intake" if inst.paused else "running — pause intake",
                     value="pause",
                 ),
+                _action(
+                    "rebuild shell",
+                    "wipe the cached clone; rebuilds on next entry",
+                    value="rebuild shell",
+                ),
                 _sep(),
                 _back_choice("done"),
             ],
@@ -1129,6 +1134,16 @@ def _instance_edit(console) -> None:
                 name, not inst.paused, "paused manually" if not inst.paused else None
             )
             console.print(f"[{SAGE}]ok[/]")
+        elif field == "rebuild shell":
+            if confirm("Destroy the cached workspace? The next shell will re-clone."):
+                from . import shell as shell_mod
+
+                freed = shell_mod.destroy(name)
+                console.print(
+                    f"[{SAGE}]✓ shell destroyed[/] "
+                    f"[{STONE}](freed {_fmt_size(freed)} — rebuilds on next entry).[/]"
+                )
+                _pause(console)
 
 
 def _auth_state(inst):
@@ -1647,10 +1662,27 @@ def _edit_env(console, name: str) -> None:
 # --- Instance listing -------------------------------------------------------
 
 
+def _fmt_size(n: float) -> str:
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{int(n)} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
 def _show_instances(console) -> None:
+    from . import shell as shell_mod
+
     rows = []
     for inst in instances.list_all():
         names = inst.repo_names()
+        built = shell_mod.is_built(inst.name)
+        shell_cell = (
+            f"[{SAGE}]●[/] {_fmt_size(shell_mod.disk_usage(inst.name))}"
+            if built
+            else f"[{STONE}]○ empty[/]"
+        )
         rows.append(
             (
                 f"[{AMBER}]{inst.name}[/]",
@@ -1658,12 +1690,13 @@ def _show_instances(console) -> None:
                 inst.deliverable,
                 ", ".join(names) if names else "-",
                 _inst_badge(inst),
+                shell_cell,
             )
         )
     console.print()
     console.print(
         _table(
-            ["name", "engine", "deliverable", "repos", "status"],
+            ["name", "engine", "deliverable", "repos", "status", "shell"],
             rows,
             "no instances yet — choose “add” to create one",
         )

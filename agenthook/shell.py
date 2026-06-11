@@ -52,8 +52,68 @@ def _prepare(inst, cfg, engine) -> RunContext:
         job=job, inst=inst, cfg=cfg, engine=engine,
         env_all=secrets.resolve_env(inst), env_nonsecret=_nonsecret_env(inst),
     )
-    _prepare_workspace(ctx, require_prompt=False)
+    # Show live progress while the workspace is built — the first time this can
+    # be a full clone, so spinner + per-repo step text reassures it's working.
+    from rich.console import Console
+
+    console = Console()
+    first = not is_built(inst.name)
+    label = "building workspace (first time — cloning)" if first else "updating workspace"
+    try:
+        with console.status(f"[#d9a441]{label}…[/]", spinner="dots") as st:
+            ctx.log = lambda m: st.update(f"[#d9a441]{m}[/]")  # type: ignore[method-assign]
+            _prepare_workspace(ctx, require_prompt=False)
+    except Exception:
+        _prepare_workspace(ctx, require_prompt=False)  # fallback without the spinner
     return ctx
+
+
+# --- Disk footprint / shell state (per instance) ----------------------------
+
+
+def _dir_size(p) -> int:
+    if not p.exists():
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(p):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def disk_usage(inst_name: str) -> int:
+    """Bytes the instance occupies on disk: repo mirrors + auth + logs + config."""
+    return sum(
+        _dir_size(d)
+        for d in (
+            paths.repos_dir() / inst_name,
+            paths.home() / "auth" / inst_name,
+            paths.home() / "logs" / inst_name,
+            paths.instance_dir(inst_name),
+        )
+    )
+
+
+def is_built(inst_name: str) -> bool:
+    """True once at least one repo mirror has been cloned for the instance."""
+    base = paths.repos_dir() / inst_name
+    if not base.is_dir():
+        return False
+    return any((base / d / ".git").exists() for d in os.listdir(base))
+
+
+def destroy(inst_name: str) -> int:
+    """Tear the shell down: remove the cached repo mirrors (and any leftover
+    worktrees) so the next ``shell`` rebuilds from scratch. Auth and config are
+    kept. Returns the number of bytes freed."""
+    mirrors = paths.repos_dir() / inst_name
+    freed = _dir_size(mirrors)
+    if mirrors.exists():
+        shutil.rmtree(mirrors, ignore_errors=True)
+    return freed
 
 
 def _cleanup(ctx: RunContext) -> None:

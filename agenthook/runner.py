@@ -169,6 +169,11 @@ def _prepare_workspace(ctx: RunContext, *, require_prompt: bool = True) -> None:
     ctx.repos = inst.select_repos(job.request.get("repos"))
     job_root = paths.work_dir() / job.id
     git_env = _process_env(ctx)
+
+    def _log_repo(r):
+        first = not git_ops.mirror_path(inst, r).joinpath(".git").exists()
+        ctx.log(f"{'cloning' if first else 'updating'} {r.name}…")
+
     if not ctx.repos:
         # No repo: a plain scratch workspace (analysis/action without code).
         ctx.wt = _empty_workdir(job.id)
@@ -176,16 +181,20 @@ def _prepare_workspace(ctx: RunContext, *, require_prompt: bool = True) -> None:
         # Single repo keeps the historical layout: the checkout *is* the root,
         # so context files and cwd land at the repo root.
         r = ctx.repos[0]
+        _log_repo(r)
         ctx.wt = git_ops.create_worktree(inst, r, job_root, _base_for(job, r), env=git_env)
         ctx.repo_dirs[r.name] = ctx.wt
+        ctx.log(f"checked out {r.name}")
     else:
         # Multi-checkout: each repo side by side under the job workspace root.
         job_root.mkdir(parents=True, exist_ok=True)
         ctx.wt = job_root
-        for r in ctx.repos:
+        for n, r in enumerate(ctx.repos, 1):
+            _log_repo(r)
             sub = job_root / r.name
             git_ops.create_worktree(inst, r, sub, _base_for(job, r), env=git_env)
             ctx.repo_dirs[r.name] = sub
+            ctx.log(f"checked out {r.name} ({n}/{len(ctx.repos)})")
     job.workdir = str(ctx.wt)
     if ctx.repo_dirs:
         job.metadata["repos"] = list(ctx.repo_dirs)
