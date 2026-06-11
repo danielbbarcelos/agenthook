@@ -168,8 +168,8 @@ def _pt_style():
 
     return Style.from_dict(
         {
-            "frame.border": BORDER,
-            "frame.label": f"bold {BONE}",
+            "border": BORDER,
+            "title": f"bold {BONE}",
             "pointer": f"{AMBER} bold",
             "sel": f"{AMBER} bold",
             "name": BONE,
@@ -185,9 +185,8 @@ def _boxed_select(message: str, choices: list, *, header: str | None = None):
     import questionary
     from prompt_toolkit import Application
     from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import Layout, VSplit, Window
+    from prompt_toolkit.layout import Layout, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.widgets import Frame
 
     rows: list[dict] = []
     for c in choices:
@@ -212,48 +211,74 @@ def _boxed_select(message: str, choices: list, *, header: str | None = None):
         return None
     pos = {"i": selectable[0]}
 
-    def _len(r) -> int:
-        return 2 + sum(len(t) for _, t in r["frags"]) + len(r.get("dis", ""))
+    def _term_width() -> int:
+        try:
+            from prompt_toolkit.application import get_app
 
-    inner_w = max(
-        [_len(r) for r in rows if not r["sep"]]
-        + ([len(header) + 2] if header else [])
-        + [len(message)]
-    )
+            return get_app().output.get_size().columns
+        except Exception:  # noqa: BLE001
+            import shutil
+
+            return shutil.get_terminal_size((100, 24)).columns
 
     def fragments():
+        # A rounded, full-width box drawn by hand (prompt_toolkit's Frame has
+        # square corners) — ╭╮╰╯ to match the Rich tables and hero.
+        width = max(40, _term_width())
+        inner = width - 4  # "│ " + content + " │"
         out: list = []
+
+        if message:
+            left = "╭─ "
+            dashes = max(0, width - len(left) - len(message) - 2)
+            out += [
+                ("class:border", left),
+                ("class:title", message),
+                ("class:border", " " + "─" * dashes + "╮"),
+                ("", "\n"),
+            ]
+        else:
+            out += [("class:border", "╭" + "─" * (width - 2) + "╮"), ("", "\n")]
+
+        def row(frags, used):
+            o = [("class:border", "│ "), *frags]
+            if used < inner:
+                o.append(("", " " * (inner - used)))
+            o += [("class:border", " │"), ("", "\n")]
+            return o
+
         if header:
-            out += [("class:head", "  " + header), ("", "\n")]
+            htxt = header[:inner]
+            out += row([("class:head", htxt)], len(htxt))
+
         for i, r in enumerate(rows):
             if r["sep"]:
                 lbl = r["label"]
-                line = f"  ─── {lbl} " if lbl else "  "
-                line += "─" * max(0, inner_w - len(line))
-                out += [("class:sep", line), ("", "\n")]
+                s = f"─── {lbl} " if lbl else ""
+                s = (s + "─" * max(0, inner - len(s)))[:inner]
+                out += row([("class:sep", s)], len(s))
                 continue
             sel = i == pos["i"]
-            out.append(("class:pointer", "● ") if sel else ("", "  "))
+            frags = [("class:pointer", "● ") if sel else ("", "  ")]
+            used = 2
             if r["disabled"]:
-                text = "".join(t for _, t in r["frags"]) + (r["dis"] or "")
-                out.append(("class:off", text))
+                text = ("".join(t for _, t in r["frags"]) + (r["dis"] or ""))[: inner - 2]
+                frags.append(("class:off", text))
+                used += len(text)
             else:
                 for st, txt in r["frags"]:
                     # the default-styled name fragment glows amber when selected;
                     # already-colored fragments (status, etc.) keep their color.
-                    if st == "":
-                        out.append(("class:sel" if sel else "class:name", txt))
-                    else:
-                        out.append((st, txt))
-            out.append(("", "\n"))
-        if out and out[-1] == ("", "\n"):
-            out.pop()
+                    style = ("class:sel" if sel else "class:name") if st == "" else st
+                    frags.append((style, txt))
+                    used += len(txt)
+            out += row(frags, used)
+
+        out += [("class:border", "╰" + "─" * (width - 2) + "╯")]
         return out
 
     control = FormattedTextControl(fragments, focusable=True, show_cursor=False)
-    body = Window(control, dont_extend_height=True, dont_extend_width=True)
-    frame = Frame(body, title=message)
-    root = VSplit([frame, Window()])
+    root = Window(control, dont_extend_height=True)
 
     kb = KeyBindings()
 
@@ -518,7 +543,7 @@ def _banner(console) -> None:
             box=box.ROUNDED,
             border_style=BORDER,
             padding=(0, 2),
-            expand=False,
+            expand=True,
         )
     )
 
