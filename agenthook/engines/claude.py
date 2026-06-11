@@ -27,14 +27,17 @@ class ClaudeEngine(Engine):
     def build_argv(self, spec: RunSpec) -> list[str]:
         argv = [self.binary, "-p", spec.prompt, "--output-format", "stream-json", "--verbose"]
 
-        # Mode -> permission flags.
+        # Mode -> permission flags. Every run here is headless (`-p`), so the
+        # permission mode must be non-interactive: an unanswered tool-permission
+        # prompt hangs the run forever. PLAN emits a plan and exits; AUTO and
+        # DEFAULT both run non-interactively (tools stay restricted by
+        # --disallowedTools, so read-only deliverables remain read-only).
         if spec.mode is Mode.PLAN:
             argv += ["--permission-mode", "plan"]
-        elif spec.mode is Mode.AUTO:
-            if spec.sandbox:
-                argv += ["--dangerously-skip-permissions"]
-            else:
-                argv += ["--permission-mode", "acceptEdits"]
+        elif spec.sandbox:
+            argv += ["--dangerously-skip-permissions"]
+        else:
+            argv += ["--permission-mode", "acceptEdits"]
 
         if spec.model:
             argv += ["--model", spec.model]
