@@ -52,7 +52,7 @@ def _prepare(inst, cfg, engine) -> RunContext:
         job=job, inst=inst, cfg=cfg, engine=engine,
         env_all=secrets.resolve_env(inst), env_nonsecret=_nonsecret_env(inst),
     )
-    _prepare_workspace(ctx)
+    _prepare_workspace(ctx, require_prompt=False)
     return ctx
 
 

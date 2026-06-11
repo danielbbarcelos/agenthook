@@ -25,6 +25,18 @@ _HELP = """[dim]commands:
   /exit  /quit       leave[/]"""
 
 
+def _flush_input() -> None:
+    """Discard anything typed while a turn was running, so stray keystrokes /
+    Enters don't auto-submit once the prompt comes back."""
+    try:
+        import sys
+        import termios
+
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:  # noqa: BLE001 — non-tty / non-posix
+        pass
+
+
 def _parse_repo_sel(value):
     """None=all, ''=none, 'a,b'=subset — mirrors cli._parse_repo_sel."""
     if value is None:
@@ -112,8 +124,14 @@ def repl(
 
         job = _build_job(inst, line, deliv, tk, sel)
         store.create_job(job)
-        with console.status("[dim]thinking…[/]", spinner="dots"):
-            job = runner.run_job(job, log_cb=lambda _m: None)
+        try:
+            with console.status("[dim]thinking… (Ctrl+C to cancel)[/]", spinner="dots"):
+                job = runner.run_job(job, log_cb=lambda _m: None)
+        except KeyboardInterrupt:
+            _flush_input()
+            console.print("[#d08770]· cancelled.[/] [dim]send another message.[/]\n")
+            continue
+        _flush_input()  # drop input typed while it was thinking (no auto-resubmit)
 
         label = inst.engine
         if job.result and job.result.text:

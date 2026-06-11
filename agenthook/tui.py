@@ -558,26 +558,71 @@ def main_menu() -> None:
 
 
 def _serve(console) -> None:
-    from .config import load_config
+    import questionary
 
-    cfg = load_config()
-    _clear(console, "serve")
-    console.print(
-        f"\n  [{BONE}]Start the webhook server on[/] "
-        f"[{AMBER}]http://{cfg.host}:{cfg.port}[/][{STONE}] — Ctrl+C to stop.[/]\n"
-    )
-    if not confirm("Start serving now?"):
-        return
-    try:
-        import uvicorn
+    from .config import load_config, save_config
 
-        store.init_db()
-        console.print(f"[{SAGE}]agenthook[/] serving on http://{cfg.host}:{cfg.port}\n")
-        uvicorn.run("agenthook.server:app", host=cfg.host, port=cfg.port, workers=1, log_level="info")
-    except KeyboardInterrupt:
-        console.print(f"\n[{STONE}]server stopped.[/]")
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[{RUST}]error:[/] {exc}")
+    while True:
+        cfg = load_config()
+        _clear(console, "serve")
+        console.print(
+            f"\n  [{BONE}]webhook server[/]   [{AMBER}]http://{cfg.host}:{cfg.port}[/]\n"
+        )
+        act = _select(
+            "serve",
+            [
+                _action("start", "run the server (Ctrl+C to stop)"),
+                _action("set port", f"current: {cfg.port}", value="set port"),
+                _action("set host", f"current: {cfg.host}", value="set host"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
+        if act is None or act == _BACK:
+            return
+        if act == "set port":
+            val = questionary.text(
+                "Port:", default=str(cfg.port), qmark="?", style=_style()
+            ).ask()
+            if val and val.strip().isdigit():
+                cfg.port = int(val.strip())
+                save_config(cfg)
+                console.print(f"[{SAGE}]✓ port = {cfg.port}[/]")
+            elif val:
+                console.print(f"[{RUST}]not a number.[/]")
+            _pause(console)
+        elif act == "set host":
+            val = questionary.text(
+                "Host (0.0.0.0 = all interfaces):",
+                default=cfg.host,
+                qmark="?",
+                style=_style(),
+            ).ask()
+            if val:
+                cfg.host = val.strip()
+                save_config(cfg)
+                console.print(f"[{SAGE}]✓ host = {cfg.host}[/]")
+            _pause(console)
+        elif act == "start":
+            try:
+                import uvicorn
+
+                store.init_db()
+                console.print(
+                    f"[{SAGE}]agenthook[/] serving on http://{cfg.host}:{cfg.port}\n"
+                )
+                uvicorn.run(
+                    "agenthook.server:app",
+                    host=cfg.host,
+                    port=cfg.port,
+                    workers=1,
+                    log_level="info",
+                )
+            except KeyboardInterrupt:
+                console.print(f"\n[{STONE}]server stopped.[/]")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[{RUST}]error:[/] {exc}")
+            _pause(console)
 
 
 # --- Instances submenu ------------------------------------------------------
@@ -867,38 +912,34 @@ def _instance_view(console) -> None:
 
     repos = inst.resolved_repos()
     _section(console, f"repositories  ({len(repos)})")
-    if repos:
-        for r in repos:
-            console.print(f"  [{CYAN}]•[/] [{BONE}]{r.name:<22}[/][{STONE}]{r.branch_base}[/]")
-    else:
-        console.print(f"  [{STONE}]no repos in the pool.[/]")
+    console.print(
+        _table(
+            ["repo", "branch base"],
+            [(r.name, r.branch_base) for r in repos],
+            "no repos in the pool",
+        )
+    )
 
     try:
         items = secrets.get_backend(inst).items(inst)
     except Exception:  # noqa: BLE001
         items = []
     _section(console, f"env  ({len(items)}, encrypted)")
-    if items:
-        for ev in items:
-            if ev.secret:
-                console.print(
-                    f"  [{BONE}]{ev.name:<16}[/][dim]••••••••••••[/][{CLAY}]   secret[/]"
-                )
-            else:
-                console.print(f"  [{BONE}]{ev.name:<16}[/][{BONE}]{ev.value}[/]")
-    else:
-        console.print(f"  [{STONE}]no variables.[/]")
+    env_rows = []
+    for ev in items:
+        if ev.secret:
+            env_rows.append((ev.name, "[dim]••••••••••••[/]", f"[{CLAY}]secret[/]"))
+        else:
+            env_rows.append((ev.name, f"[{CYAN}]{ev.value}[/]", f"[{STONE}]no[/]"))
+    console.print(_table(["env", "value", "secret"], env_rows, "no variables"))
 
     jobs = [j for j in store.list_jobs(instance=name, limit=50)][:6]
     _section(console, "recent jobs")
-    if jobs:
-        for j in jobs:
-            console.print(
-                f"  [{STONE}]{j.id:<14}[/]{_job_badge(j.status.value):<24} "
-                f"[{STONE}]{j.deliverable.value:<10}{_ago(j.created_at)}[/]"
-            )
-    else:
-        console.print(f"  [{STONE}]no jobs yet.[/]")
+    job_rows = [
+        (j.id, _job_badge(j.status.value), j.deliverable.value, _ago(j.created_at))
+        for j in jobs
+    ]
+    console.print(_table(["job", "status", "deliverable", "age"], job_rows, "no jobs yet"))
     _pause(console)
 
 
@@ -987,6 +1028,8 @@ def _instance_edit(console) -> None:
                 _action("branch base", inst.branch_base, value="branch base"),
                 _sep("connections"),
                 _action("authentication", auth_v),
+                _action("github (gh)", _gh_status(inst), value="github"),
+                _action("webhook access", _webhook_status(inst), value="webhook"),
                 _action("repositories", f"{len(inst.resolved_repos())} repos"),
                 _action("env vars", f"{len(_env_items(inst))} vars", value="env vars"),
                 _sep("state"),
@@ -1017,6 +1060,10 @@ def _instance_edit(console) -> None:
                 _save_inst(console, inst)
         elif field == "authentication":
             _edit_auth(console, name)
+        elif field == "github":
+            _edit_github(console, name)
+        elif field == "webhook":
+            _edit_webhook(console, name)
         elif field == "model":
             import questionary
 
@@ -1169,6 +1216,181 @@ def _edit_auth(console, name: str) -> None:
                     f"[{SAGE}]✓ auth wiped.[/]" if wiped else f"[{STONE}]nothing to wipe.[/]"
                 )
                 _pause(console)
+
+
+# --- GitHub (gh) auth — per-instance, like the engine (design §5) -----------
+
+
+_GH_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
+
+
+def _gh_token_name(inst):
+    """The name of the GitHub token secret on this instance, if any."""
+    names = {ev.name for ev in _env_items(inst)}
+    for n in _GH_VARS:
+        if n in names:
+            return n
+    return None
+
+
+def _gh_status(inst) -> str:
+    return "token set" if _gh_token_name(inst) else "not set"
+
+
+def _edit_github(console, name: str) -> None:
+    """Per-instance GitHub access. gh/git authenticate via an encrypted PAT
+    (GH_TOKEN) — isolated per instance, exactly like the engine's own auth, just
+    carried as a secret rather than a config dir."""
+    import questionary
+    from rich.panel import Panel
+
+    while True:
+        inst = instances.load(name)
+        tok = _gh_token_name(inst)
+        has = tok is not None
+        _clear(console, "instances", name, "github")
+        console.print()
+        status = f"[{SAGE}]● token set[/]" if has else f"[{RUST}]not set[/]"
+        console.print(
+            Panel(
+                f"[{STONE}]status   [/]{status}\n"
+                f"[{STONE}]variable [/][{BONE}]{tok or 'GH_TOKEN'}[/]\n"
+                f"[{STONE}]scope    [/][dim]this instance only (encrypted)[/]\n"
+                f"[{STONE}]used by  [/][dim]git push · gh pr create[/]",
+                title=f"GitHub · {name}",
+                border_style=AMBER,
+                padding=(0, 2),
+                expand=False,
+            )
+        )
+        act = _select(
+            "Manage GitHub access",
+            [
+                _action("set token", "store a PAT (encrypted)", value="set token"),
+                _action("clear token", "remove the PAT", value="clear token"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
+        if act is None or act == _BACK:
+            return
+        if act == "set token":
+            val = questionary.password(
+                "GH_TOKEN (PAT, stored as an encrypted secret):", qmark="?", style=_style()
+            ).ask()
+            if val:
+                secrets.get_backend(inst).set(inst, "GH_TOKEN", val, True)
+                console.print(f"[{SAGE}]✓ GH_TOKEN saved (encrypted).[/]")
+            else:
+                console.print(f"[{CLAY}]cancelled.[/]")
+            _pause(console)
+        elif act == "clear token":
+            if has and confirm("Remove the GitHub token from this instance?"):
+                for n in _GH_VARS:
+                    try:
+                        secrets.get_backend(inst).delete(inst, n)
+                    except Exception:  # noqa: BLE001
+                        pass
+                console.print(f"[{SAGE}]✓ token cleared.[/]")
+                _pause(console)
+            elif not has:
+                console.print(f"[{STONE}]no token set.[/]")
+                _pause(console)
+
+
+# --- Webhook access — schemes + IP allowlist (design §12) -------------------
+
+
+def _webhook_status(inst) -> str:
+    wa = inst.webhook_auth or {}
+    schemes = wa.get("schemes") or []
+    ips = wa.get("ip_allow") or []
+    parts = []
+    if schemes:
+        parts.append("+".join(schemes))
+    if ips:
+        parts.append(f"{len(ips)} IP(s)")
+    return ", ".join(parts) if parts else "open (no auth)"
+
+
+def _edit_webhook(console, name: str) -> None:
+    import questionary
+    from rich.panel import Panel
+
+    schemes_all = ["bearer", "hmac", "header", "ip-allow"]
+    while True:
+        inst = instances.load(name)
+        wa = dict(inst.webhook_auth or {})
+        schemes = list(wa.get("schemes") or [])
+        ips = list(wa.get("ip_allow") or [])
+        _clear(console, "instances", name, "webhook access")
+        console.print()
+        console.print(
+            Panel(
+                f"[{STONE}]schemes  [/][{BONE}]{', '.join(schemes) or 'none (open)'}[/]\n"
+                f"[{STONE}]ip allow [/][{BONE}]{', '.join(ips) or 'any'}[/]\n"
+                f"[{STONE}]header   [/][dim]{wa.get('header_name') or '-'}[/]\n"
+                f"[{STONE}]endpoint [/][dim]POST /hook/{name}[/]",
+                title=f"Webhook access · {name}",
+                border_style=AMBER,
+                padding=(0, 2),
+                expand=False,
+            )
+        )
+        act = _select(
+            "Manage webhook access",
+            [
+                _action("schemes", "choose auth schemes"),
+                _action("add ip", "allow a CIDR / IP", value="add ip"),
+                _action("remove ip", "revoke a CIDR / IP", value="remove ip"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
+        if act is None or act == _BACK:
+            return
+        if act == "schemes":
+            print()
+            picked = questionary.checkbox(
+                "Auth schemes (space toggles, Enter confirms):",
+                choices=[
+                    questionary.Choice(s, checked=(s in schemes)) for s in schemes_all
+                ],
+                qmark="?",
+                style=_style(),
+            ).ask()
+            if picked is not None:
+                wa["schemes"] = picked
+                inst.webhook_auth = wa
+                _save_inst(console, inst)
+                if any(s in picked for s in ("bearer", "hmac", "header")):
+                    console.print(
+                        f"[{STONE}]note: bearer/hmac/header need a secret — set it in "
+                        f"env vars (e.g. AGENTHOOK_WEBHOOK_SECRET).[/]"
+                    )
+                _pause(console)
+        elif act == "add ip":
+            val = questionary.text(
+                "CIDR or IP (e.g. 10.0.0.0/8 or 1.2.3.4):", qmark="?", style=_style()
+            ).ask()
+            if val and val.strip():
+                ips.append(val.strip())
+                wa["ip_allow"] = ips
+                if "ip-allow" not in schemes:
+                    wa["schemes"] = schemes + ["ip-allow"]
+                inst.webhook_auth = wa
+                _save_inst(console, inst)
+        elif act == "remove ip":
+            if not ips:
+                continue
+            target = _select("Remove which?", ips + [_sep(), _back_choice()])
+            if target and target != _BACK:
+                ips = [i for i in ips if i != target]
+                wa["ip_allow"] = ips
+                if not ips and "ip-allow" in schemes:
+                    wa["schemes"] = [s for s in schemes if s != "ip-allow"]
+                inst.webhook_auth = wa
+                _save_inst(console, inst)
 
 
 # --- Repo pool editor (design §11) ------------------------------------------

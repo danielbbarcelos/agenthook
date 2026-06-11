@@ -150,10 +150,18 @@ def dry_run(job: Job) -> dict:
 # --- Workspace & execution --------------------------------------------------
 
 
-def _prepare_workspace(ctx: RunContext) -> None:
+def _prepare_workspace(ctx: RunContext, *, require_prompt: bool = True) -> None:
     job, inst, engine = ctx.job, ctx.inst, ctx.engine
     context = templating.build_context(job.request, ctx.env_nonsecret)
-    ctx.prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
+    # Interactive sessions (shell/login) only need the workspace checked out —
+    # there's no prompt to resolve, so don't fail when one is absent.
+    if require_prompt:
+        ctx.prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
+    else:
+        try:
+            ctx.prompt = job.prompt or templating.resolve_prompt(inst, job.request, context)
+        except Exception:  # noqa: BLE001
+            ctx.prompt = ""
     job.prompt = ctx.prompt
 
     from . import paths
