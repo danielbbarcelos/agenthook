@@ -139,12 +139,21 @@ def _frame(inst, engine, cfg, kind: str) -> None:
         print("  run /login, then /exit when done\n")
 
 
+def _user_args() -> list[str]:
+    """Run the container as the host user (non-root). Claude refuses
+    --dangerously-skip-permissions as root, and matching the host uid keeps the
+    mounted auth/workspace files readable+writable by both login and jobs."""
+    if hasattr(os, "getuid"):
+        return ["--user", f"{os.getuid()}:{os.getgid()}"]
+    return []
+
+
 def _docker_session(inst, cfg, *, kind: str, exec_replace: bool = False) -> int | None:
     engine = get_engine(inst.engine)
     auth_dir = paths.auth_dir(inst.name) / engine.name
     auth_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = ["docker", "run", "--rm", "-it", "--hostname", inst.name]
+    cmd = ["docker", "run", "--rm", "-it", "--hostname", inst.name, *_user_args(), "-e", "HOME=/tmp"]
     auth_env = engine.auth_config_env(inst, auth_dir)
     if auth_env:
         cmd += ["-v", f"{auth_dir}:{_AUTH_MOUNT}"]

@@ -410,11 +410,19 @@ def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     # on the inherited terminal stdin (it never sees EOF), hanging forever — the
     # prompt is passed via argv (-p), so the container needs no stdin at all.
     # A stable --name lets an interactive caller (chat) cancel it with docker kill.
+    import os
+
     cmd = ["docker", "run", "--rm", "--name", container_name(ctx.job)]
+    # Run as the host user (non-root): Claude refuses --dangerously-skip-permissions
+    # as root, and matching the host uid keeps the mounted auth/workspace readable.
+    if hasattr(os, "getuid"):
+        cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
     ro = ":ro" if ctx.job.deliverable.read_only else ""
     cmd += ["-v", f"{ctx.wt}:/workspace{ro}", "-w", "/workspace"]
     if ctx.session_home:
         cmd += ["-v", f"{ctx.session_home}:/root", "-e", "HOME=/root"]
+    else:
+        cmd += ["-e", "HOME=/tmp"]  # writable home for a non-root uid w/o passwd entry
     # Isolated engine config/auth — mount the instance's dir and repoint the
     # config-dir var(s) at the in-container path (host login never enters).
     auth_env = _engine_auth_env(ctx)
