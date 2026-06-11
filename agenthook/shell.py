@@ -139,6 +139,34 @@ def _frame(inst, engine, cfg, kind: str) -> None:
         print("  run /login, then /exit when done\n")
 
 
+def _chown_host(path, cfg) -> None:
+    """Chown a mounted dir to the host user via a throwaway root container —
+    repairs files left root-owned by older root container runs, which otherwise
+    block the non-root engine from writing (lost session transcripts / memory)."""
+    if not hasattr(os, "getuid"):
+        return
+    try:
+        subprocess.run(
+            ["docker", "run", "--rm", "--user", "0", "-v", f"{path}:/a",
+             cfg.docker_image, "chown", "-R", f"{os.getuid()}:{os.getgid()}", "/a"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def fix_auth_ownership(inst_name: str) -> None:
+    """Public: ensure an instance's isolated auth/config dir is host-owned so the
+    non-root engine can persist session state (called when entering chat)."""
+    cfg = load_config()
+    if not cfg.use_docker:
+        return
+    inst = instances.load(inst_name)
+    auth_dir = paths.auth_dir(inst.name) / get_engine(inst.engine).name
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    _chown_host(auth_dir, cfg)
+
+
 def _user_args() -> list[str]:
     """Run the container as the host user (non-root). Claude refuses
     --dangerously-skip-permissions as root, and matching the host uid keeps the
@@ -152,6 +180,7 @@ def _docker_session(inst, cfg, *, kind: str, exec_replace: bool = False) -> int 
     engine = get_engine(inst.engine)
     auth_dir = paths.auth_dir(inst.name) / engine.name
     auth_dir.mkdir(parents=True, exist_ok=True)
+    _chown_host(auth_dir, cfg)  # repair legacy root-owned auth state before use
 
     cmd = ["docker", "run", "--rm", "-it", "--hostname", inst.name, *_user_args(), "-e", "HOME=/tmp"]
     auth_env = engine.auth_config_env(inst, auth_dir)

@@ -12,6 +12,7 @@ the CLI and the guided TUI; never calls Typer commands in-process.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 from . import instances, store
@@ -23,6 +24,20 @@ _HELP = """[dim]commands:
   /repos a,b         use only these pool repos ('' = none, /repos with no arg = all)
   /deliverable NAME  switch the deliverable (analysis, action, patch, commit, pr)
   /exit  /quit       leave[/]"""
+
+
+def _fix_auth(name: str) -> None:
+    """Repair root-owned auth state (from older root container runs) so the
+    non-root engine can persist session transcripts → context survives turns."""
+    try:
+        from .config import load_config
+
+        if load_config().use_docker:
+            from . import shell
+
+            shell.fix_auth_ownership(name)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _session_history(name: str, tk: str, limit: int = 200) -> list[str]:
@@ -106,14 +121,24 @@ def repl(
         f" · {deliv} · repos: {shown_repos}[/]"
     )
     console.print(
-        f"[dim]thread: {tk} · /help for commands · /exit or Ctrl+D to leave · ↑ history[/]\n"
+        f"[dim]thread: {tk} · /help for commands · /exit or Ctrl+D to leave · ↑ history[/]"
     )
 
+    from rich.rule import Rule
+
+    _fix_auth(name)  # repair root-owned auth state so context persists across turns
     psession = _prompt_session(name, tk)
+    turns = 0
+    console.print(
+        Rule(f"[#6f6a5d]chat started · {time.strftime('%H:%M')}[/]", style="#45413a")
+    )
 
     while True:
         try:
-            line = psession.prompt([("fg:#6f6a5d", "you › ")]).strip()
+            ts = time.strftime("%H:%M")
+            line = psession.prompt(
+                [("fg:#45413a", f"{ts} "), ("fg:#6f6a5d", "you › ")]
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -152,6 +177,7 @@ def repl(
         _flush_input()  # drop input typed while it was thinking (no auto-resubmit)
         if done is None:  # cancelled or errored — already reported
             continue
+        turns += 1
 
         label = inst.engine
         if done.result and done.result.text:
@@ -165,6 +191,12 @@ def repl(
                 f"[#d08770]◆ {label} ›[/] [dim]({done.status.value})[/] {detail}{raw}\n"
             )
 
+    console.print(
+        Rule(
+            f"[#6f6a5d]ended · {time.strftime('%H:%M')} · {turns} turn(s)[/]",
+            style="#45413a",
+        )
+    )
     console.print("[dim]bye.[/]")
 
 
