@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agenthook · TUI design</title>
+<link rel="stylesheet" href="terminal.css">
+</head>
+<body>
+<div class="wrap">
+
+<!-- ════════════════════════════ MASTHEAD ════════════════════════════ -->
+<header class="masthead">
+  <div class="kicker">Terminal interface · design spec</div>
+  <h1>agenthook — TUI redesign</h1>
+  <p class="lede">A reference design for the <b>agenthook</b> command-line interface: ASCII screen mockups, the navigation map, the ANSI palette, microcopy, and terminal interaction patterns — ready to implement in <span style="color:var(--amber)">Typer · Rich · questionary</span>, with the live screens flagged for a future <span style="color:var(--amber)">Textual</span> dashboard.</p>
+  <div class="meta-row">
+    <span><b>Target</b> responsive 120 → 80 cols</span>
+    <span><b>Box</b> rounded ╭─╮</span>
+    <span><b>Palette</b> amber / earth</span>
+    <span><b>Microcopy</b> English</span>
+    <span><b>Pointer</b> ●</span>
+  </div>
+</header>
+
+<div class="callout" style="margin-top:24px">
+  <b>What this redesign fixes.</b> Five pains drove it: getting lost in deep menus, no live view of a running job, an intimidating instance/auth setup, weak state feedback, and a scrollback that turns to mush. The answers, throughout: a persistent <b>breadcrumb</b>, a smart <b>screen-clear rule</b>, a guided <b>setup wizard with a progress rail</b>, a shared <b>status vocabulary</b>, and a stepped <b>job runner</b>.
+</div>
+
+<!-- ════════════════════════════ 01 · SYSTEM ════════════════════════════ -->
+<section id="system">
+  <div class="sec-head">
+    <span class="sec-num">01</span><h2>Design system</h2><span class="sec-rule"></span>
+  </div>
+  <p class="sec-note">Everything is monospace and color-coded by <i>role</i>, never by decoration. The palette is warm — amber on near-black earth — so success-green and response-cyan read as deliberate accents rather than noise. Color always pairs with a glyph or word, so meaning survives on a mono/no-color terminal.</p>
+
+  <div class="lbl">ANSI palette — roles</div>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#d9a441"></div><div class="role amber">highlight / brand</div><div class="hex">#d9a441 · amber</div><div class="use">Selection, pointer ●, focused field, brand. The one color that means “you are here / act here.”</div></div>
+    <div class="sw"><div class="chip" style="background:#a3be8c"></div><div class="role ok">ok / success</div><div class="hex">#a3be8c · sage</div><div class="use">Completed jobs, logged-in auth, confirmations, passing checks.</div></div>
+    <div class="sw"><div class="chip" style="background:#88c0d0"></div><div class="role info">info / response</div><div class="hex">#88c0d0 · cyan</div><div class="use">Agent replies in chat, hints, neutral values, links.</div></div>
+    <div class="sw"><div class="chip" style="background:#d08770"></div><div class="role warn">warning / awaiting</div><div class="hex">#d08770 · clay</div><div class="use">awaiting_approval, blocked, failed-checks — needs a human, not an error.</div></div>
+    <div class="sw"><div class="chip" style="background:#bf616a"></div><div class="role err">error / failed</div><div class="hex">#bf616a · rust</div><div class="use">error, timeout, destructive confirmations, missing auth.</div></div>
+    <div class="sw"><div class="chip" style="background:#b48ead"></div><div class="role plan">plan / session</div><div class="hex">#b48ead · lilac</div><div class="use">Plans awaiting review and durable sessions/threads — a distinct “thinking” hue.</div></div>
+    <div class="sw"><div class="chip" style="background:#6f6a5d"></div><div class="role muted">muted</div><div class="hex">#6f6a5d · stone</div><div class="use">Back ←, quit, secondary labels, separators, nav hints, queued.</div></div>
+    <div class="sw"><div class="chip" style="background:#e8e3d8"></div><div class="role" style="color:#e8e3d8">foreground</div><div class="hex">#e8e3d8 · bone</div><div class="use">Default body text on #15140f background.</div></div>
+  </div>
+
+  <div class="two" style="margin-top:34px">
+    <div>
+      <div class="lbl">Box & rules — rounded</div>
+      <div class="ascii cozy"><span class="muted">panel</span>
+<span class="amber">╭─ Title ──────────────────╮</span>
+<span class="amber">│</span> body text               <span class="amber">│</span>
+<span class="amber">╰──────────────────────────╯</span>
+
+<span class="muted">table</span>
+<span class="muted">ID    STATUS    DELIVERABLE</span>
+<span class="muted">──────────────────────────────</span>
+3f1a  <span class="ok">success</span>   pr
+9c20  <span class="amber">running</span>   patch
+
+<span class="muted">divider between menu groups</span>
+<span class="muted">─── manage ───────────────</span></div>
+    </div>
+    <div>
+      <div class="lbl">Affordances</div>
+      <div class="ascii cozy"><span class="amber">●</span> <span class="amber b">selected option</span>     pointer + amber bold
+  unselected option
+<span class="muted">←</span> <span class="muted">back</span>               muted, always last
+<span class="muted">↑↓</span> move  <span class="muted">↵</span> select  <span class="muted">esc</span> back  <span class="muted">q</span> quit
+
+<span class="info">?</span> question / prompt    cyan leading glyph
+<span class="ok">✓</span> done / success      sage
+<span class="warn">▲</span> needs attention     clay
+<span class="err">✗</span> failed / error      rust
+<span class="amber">▸</span> running step        amber
+<span class="muted">·</span> pending step        stone
+<span class="muted">type to filter…</span>      pickers are searchable</div>
+    </div>
+  </div>
+
+  <div class="lbl">Status vocabulary — one set of colors everywhere</div>
+  <div class="ascii cozy"><span class="b dim">instance</span>   <span class="ok">● active</span>     <span class="muted">⏸ paused</span>     <span class="err">⚠ no auth</span>
+
+<span class="b dim">job</span>        <span class="muted">queued</span>   <span class="amber">running</span>   <span class="plan">awaiting_approval</span>   <span class="ok">success</span>
+           <span class="warn">failed-checks</span>   <span class="warn">blocked</span>   <span class="err">error</span>   <span class="err">timeout</span>   <span class="muted">interrupted</span>
+
+<span class="b dim">auth</span>       <span class="ok">logged in</span>   <span class="info">via api-key</span>   <span class="err">not logged in</span></div>
+</section>
+
+<!-- ════════════════════════════ 02 · PATTERNS ════════════════════════════ -->
+<section id="patterns">
+  <div class="sec-head">
+    <span class="sec-num">02</span><h2>Interaction patterns</h2><span class="sec-rule"></span>
+  </div>
+  <p class="sec-note">Two levels, always. Every screen here is reachable two ways: a <b>dry command</b> for automation/CI, and a <b>friendly path</b> through arrow-key menus. Running <code>agenthook</code> with no args opens the main menu; any command with a required argument omitted opens a <b>picker</b> for it.</p>
+
+  <div class="two">
+    <div>
+      <div class="lbl">Two-level principle</div>
+      <div class="ascii cozy"><span class="muted"># dry — scriptable, no prompts</span>
+<span class="amber">$</span> agenthook instances view api-bot
+<span class="amber">$</span> agenthook jobs approve 3f1a --yes
+
+<span class="muted"># friendly — omit the arg, get a picker</span>
+<span class="amber">$</span> agenthook instances view
+  <span class="info">?</span> Which instance? <span class="muted">(type to filter)</span>
+  <span class="amber">●</span> <span class="amber b">api-bot</span>      <span class="muted">claude-code · pr</span>
+    docs-writer  <span class="muted">aider · analysis</span>
+    infra-bot    <span class="muted">codex · commit</span>
+
+<span class="muted"># bare — the full menu</span>
+<span class="amber">$</span> agenthook</div>
+    </div>
+    <div>
+      <div class="lbl">Keys — consistent across every menu</div>
+      <div class="ascii cozy"><span class="amber">↑ ↓ / j k</span>    move cursor
+<span class="amber">↵ enter</span>      select
+<span class="amber">esc</span>          back one level
+<span class="amber">←</span>            back (visible menu item)
+<span class="amber">/</span> or type    filter the current list
+<span class="amber">q</span>            quit from main menu
+<span class="amber">ctrl-c</span>       cancel current prompt
+<span class="amber">tab</span>          accept suggested default
+
+<span class="muted">in chat / shell:</span>
+<span class="amber">/exit</span>        leave the container
+<span class="amber">/help</span>        commands  ·  <span class="amber">↑</span> history</div>
+    </div>
+  </div>
+
+  <div class="lbl">Screen-clear & history rule</div>
+  <p class="sec-note" style="margin-bottom:14px">The old build never cleared, so the scrollback became soup. New rule: <b>clear on “big” transitions, accumulate on “small” ones</b> — and always anchor with a breadcrumb so the user knows where they are without re-reading history.</p>
+  <div class="ascii cozy"><span class="ok">clear + redraw</span>  entering a new top section (instances / jobs / sessions),
+                opening view/edit, launching chat or shell.
+
+<span class="amber">keep + append</span>   steps inside one flow (wizard pages, a sequence of
+                prompts, confirmations) — so context stays visible.
+
+<span class="muted">breadcrumb</span>      first line after every clear, dimmed:
+                <span class="muted">agenthook ▸ instances ▸ api-bot ▸ edit</span></div>
+</section>
+
+<!-- ════════════════════════════ 03 · NAV MAP ════════════════════════════ -->
+<section id="navmap">
+  <div class="sec-head">
+    <span class="sec-num">03</span><h2>Navigation map</h2><span class="sec-rule"></span>
+  </div>
+  <p class="sec-note">The whole tree. Each leaf shows its dry command — proof that nothing is menu-only. Arrows (►) mark jumps into a dedicated editor screen.</p>
+  <div class="ascii"><span class="amber b">agenthook</span>  <span class="muted">← bare command opens the main menu; screen clears once on entry</span>
+<span class="muted">│</span>
+<span class="muted">├─</span> <span class="amber b">instances</span> <span class="muted">───────────────────────────────────────────────────────</span>
+<span class="muted">│   ·  interact</span>
+<span class="muted">│   ├─</span> chat       <span class="muted">agenthook chat &lt;instance&gt; [thread]   → REPL in container</span>
+<span class="muted">│   ├─</span> shell      <span class="muted">agenthook shell &lt;instance&gt;            → bash in container</span>
+<span class="muted">│   ·  manage</span>
+<span class="muted">│   ├─</span> add        <span class="muted">agenthook instances add               → setup wizard</span>
+<span class="muted">│   ├─</span> view       <span class="muted">agenthook instances view &lt;instance&gt;</span>
+<span class="muted">│   ├─</span> edit       <span class="muted">agenthook instances edit &lt;instance&gt;</span>
+<span class="muted">│   │     ├─</span> deliverable · engine · model · branch base
+<span class="muted">│   │     ├─</span> authentication   <span class="amber">►</span> <span class="muted">auth screen</span>
+<span class="muted">│   │     ├─</span> repositories     <span class="amber">►</span> <span class="muted">repo-pool editor</span>
+<span class="muted">│   │     ├─</span> env vars         <span class="amber">►</span> <span class="muted">env editor</span>
+<span class="muted">│   │     └─</span> pause · resume
+<span class="muted">│   ·  list / remove</span>
+<span class="muted">│   ├─</span> list       <span class="muted">agenthook instances list</span>
+<span class="muted">│   └─</span> remove     <span class="muted">agenthook instances remove &lt;instance&gt;   ⚠ confirm</span>
+<span class="muted">│</span>
+<span class="muted">├─</span> <span class="amber b">jobs</span> <span class="muted">────────────────────────────────────────────────────────────</span>
+<span class="muted">│   ├─</span> list       <span class="muted">agenthook jobs [--watch]              → live list</span>
+<span class="muted">│   ├─</span> view       <span class="muted">agenthook jobs view &lt;job-id&gt;</span>
+<span class="muted">│   ├─</span> approve    <span class="muted">agenthook jobs approve &lt;job-id&gt;       → plan review</span>
+<span class="muted">│   ├─</span> logs       <span class="muted">agenthook jobs logs &lt;job-id&gt; [--follow]</span>
+<span class="muted">│   └─</span> cancel     <span class="muted">agenthook jobs cancel &lt;job-id&gt;</span>
+<span class="muted">│</span>
+<span class="muted">├─</span> <span class="amber b">sessions</span> <span class="muted">────────────────────────────────────────────────────────</span>
+<span class="muted">│   ├─</span> list       <span class="muted">agenthook sessions list</span>
+<span class="muted">│   └─</span> view       <span class="muted">agenthook sessions view &lt;thread-key&gt;</span>
+<span class="muted">│</span>
+<span class="muted">├─</span> <span class="amber b">serve</span>      <span class="muted">agenthook serve [--port 8080]         → webhook server</span>
+<span class="muted">└─</span> <span class="amber b">quit</span></div>
+</section>
+
+
+<div class="screen-block" id="s-04" data-screen-label="04">
+  <div class="sec-head"><span class="sec-num">04</span><h2>Entry banner & main menu</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">Drawn once on launch. The node mark reads as a webhook → agent chain. The status line answers the first question anyone has — <i>is anything running, is the server up</i> — before they touch a key. <code>serve</code> is promoted here so the core action (start receiving webhooks) is one keystroke from the top.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook</span><span class="term-tag">no args → menu</span></div>
+    <pre class="screen"><span class="amber">●─╮</span>
+<span class="amber">  ╰─●─╮</span>        <span class="amber b">agenthook</span><span class="muted">  v0.4.2</span>
+<span class="amber">      ╰─●</span><span class="muted">      self-hosted agent task runner</span>
+
+<span class="fg">3 instances</span><span class="muted"> · </span><span class="amber">1 running</span><span class="muted"> · </span><span class="muted">2 queued</span><span class="muted"> · </span><span class="fg">server </span><span class="ok">● up</span><span class="muted"> :8080</span>
+
+<span class="info">  ? </span><span class="fg">Where to?</span>
+
+<span class="amber">● </span><span class="amber b">instances   </span><span class="muted">register, configure &amp; run agents</span>
+  <span class="fg">jobs        </span><span class="muted">watch and review executions</span>
+  <span class="fg">sessions    </span><span class="muted">durable threads across jobs</span>
+  <span class="fg">serve       </span><span class="muted">start the webhook server</span>
+<span class="muted">  ───  ──────────────────────────</span>
+  <span class="fg">quit        </span><span class="muted"></span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>↑↓</b> move, <b>↵</b> select, <b>q</b> quits from here only.</li><li>Screen clears once on entry; the banner is not redrawn as you navigate.</li><li>Each item is also a subcommand — <b>agenthook jobs</b> jumps straight in.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Prompt <b>“Where to?”</b> — friendly, not a label.</li><li>Status counts use the shared color vocabulary: <span class="amber">running</span>, <span class="muted">queued</span>, <span class="ok">● up</span>.</li><li>Descriptions are verb-first and ≤6 words.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-05" data-screen-label="05">
+  <div class="sec-head"><span class="sec-num">05</span><h2>Instances submenu</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">The fix for “too many levels”: instead of a flat 8-item list, actions are grouped by <b>intent</b> — what you do <i>with</i> an agent (interact), how you <i>set it up</i> (manage), and bulk <i>list/remove</i>. Labelled separators give the eye anchors; <b>back</b> is always the muted last row.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances</span><span class="term-tag">grouped</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances</span>
+
+<span class="info">  ? </span><span class="fg">instances — pick an action</span>
+
+<span class="muted">  ─── interact ──────────────────────</span>
+<span class="amber">● </span><span class="amber b">chat        </span><span class="muted">talk to the agent in a container</span>
+  <span class="fg">shell       </span><span class="muted">open a bash shell in a container</span>
+<span class="muted">  ─── manage ────────────────────────</span>
+  <span class="fg">add         </span><span class="muted">register a new instance</span>
+  <span class="fg">view        </span><span class="muted">inspect config, repos, env &amp; jobs</span>
+  <span class="fg">edit        </span><span class="muted">change config or authentication</span>
+<span class="muted">  ─── list · remove ─────────────────</span>
+  <span class="fg">list        </span><span class="muted">all instances at a glance</span>
+  <span class="fg">remove      </span><span class="muted">delete an instance</span>
+<span class="muted">  ───  ──────────────────────────</span>
+<span class="muted">  ← </span><span class="muted">back</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Groups are visual only — arrows still move through every item linearly.</li><li><b>esc</b> and the <b>← back</b> row both return to the main menu.</li><li>Typing filters across all groups at once.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Separators are titled: <span class="muted">─── interact ───</span>.</li><li>Back uses ← + muted, never a bracketed [Back].</li><li>Action names mirror the subcommands exactly.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-06" data-screen-label="06">
+  <div class="sec-head"><span class="sec-num">06</span><h2>Add instance — guided setup</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">The “intimidating setup” pain, solved with a <b>progress rail</b>: one decision per page, with completed steps collapsing into their chosen values on the left so you always see how far you’ve come and what you picked. Auth isolation is stated inline at the moment it matters. The encryption key gets its own emphatic, framed step — shown exactly once.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances add</span><span class="term-tag">step 4 / 8</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ add                              step 4 / 8</span>
+
+<span class="ok">  ✓ </span><span class="dim">name            </span><span class="muted">api-bot</span>
+<span class="ok">  ✓ </span><span class="dim">engine          </span><span class="muted">claude-code</span>
+<span class="ok">  ✓ </span><span class="dim">deliverable     </span><span class="muted">pr</span>
+<span class="amber">  ▸ </span><span class="amber b">auth method     </span>
+<span class="muted">  · </span><span class="muted">model           </span>
+<span class="muted">  · </span><span class="muted">branch base     </span>
+<span class="muted">  · </span><span class="muted">repositories    </span>
+<span class="muted">  · </span><span class="muted">encryption key  </span>
+
+<span class="info">  ? </span><span class="fg">How should this instance authenticate?</span>
+    <span class="muted">Each instance logs in on its own — never the host’s.</span>
+
+<span class="amber">● </span><span class="amber b">subscription  </span><span class="muted">log in to a provider account (isolated)</span>
+  <span class="fg">api-key       </span><span class="muted">paste a provider API key</span>
+
+<span class="muted">  ↑↓ </span><span class="muted">move</span><span class="muted">   ↵ </span><span class="muted">select</span><span class="muted">   esc </span><span class="muted">back</span></pre>
+  </div>
+<div class="lbl" style="margin:18px 0 10px">Later in the same wizard — the one-time key</div><div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances add</span><span class="term-tag">shown once</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ add                              step 7 / 8</span>
+
+<span class="warn">  ▲ </span><span class="warn">Encryption key — shown once</span>
+
+<span class="warn">╭─ Save this key now ────────────────────────────────────╮</span>
+<span class="warn">│</span>                                                        <span class="warn">│</span>
+<span class="warn">│</span>  <span class="amber b">ah_key_9f3c2a7e8b41d6f05c1e2f4a9b7d8e0c3</span>              <span class="warn">│</span>
+<span class="warn">│</span>                                                        <span class="warn">│</span>
+<span class="warn">│</span><span class="dim">  Encrypts this instance’s secrets at rest.</span>             <span class="warn">│</span>
+<span class="warn">│</span><span class="dim">  It cannot be shown again — losing it means</span>            <span class="warn">│</span>
+<span class="warn">│</span><span class="dim">  re-entering every secret for this instance.</span>           <span class="warn">│</span>
+<span class="warn">│</span>                                                        <span class="warn">│</span>
+<span class="warn">╰────────────────────────────────────────────────────────╯</span>
+
+<span class="amber">  ● </span><span class="amber b">I’ve saved it — continue</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Each step is its own prompt; <b>esc</b> walks back without losing earlier answers.</li><li>Sensible defaults pre-selected — <b>↵</b> through the happy path in seconds.</li><li>The key step refuses to advance until you confirm you saved it.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Rail glyphs: <span class="ok">✓</span> done · <span class="amber">▸</span> current · <span class="muted">·</span> pending.</li><li>Reassurance copy: <b>“never the host’s.”</b></li><li>Warning header <span class="warn">▲ shown once</span> sets expectation before the secret appears.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-07" data-screen-label="07">
+  <div class="sec-head"><span class="sec-num">07</span><h2>View instance</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">Everything about one instance on a single screen, sectioned by titled rules so density stays scannable. Secrets are always obfuscated (<span class="dim">••••</span>) and tagged <span class="warn">secret</span>. The recent-jobs strip turns this into a launchpad — IDs are ready to paste into <code>jobs view</code>.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances view api-bot</span><span class="term-tag">read-only</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ api-bot</span>
+
+<span class="ok">  ● </span><span class="amber b">api-bot</span><span class="ok">   active</span><span class="muted">   ·  last run 14m ago</span>
+
+<span class="muted">  ─── config ────────────────────────────────────────────────</span>
+<span class="muted">  engine        </span><span class="fg">claude-code</span>
+<span class="muted">  auth          </span><span class="fg">subscription  </span>
+
+<span class="muted">  deliverable   </span><span class="fg">pr</span>
+<span class="muted">  branch base   </span><span class="fg">main</span>
+<span class="muted">  model         </span><span class="muted">default</span>
+
+<span class="muted">  ─── repositories  (2) ─────────────────────────────────────</span>
+<span class="info">  • </span><span class="fg">acme/web-app</span><span class="muted">        main</span>
+<span class="info">  • </span><span class="fg">acme/design-sys</span><span class="muted">     main</span>
+
+<span class="muted">  ─── env  (3, encrypted) ───────────────────────────────────</span>
+<span class="muted">  GITHUB_TOKEN   </span><span class="dim">••••••••••••</span><span class="warn">   secret</span>
+<span class="muted">  NPM_TOKEN      </span><span class="dim">••••••••••••</span><span class="warn">   secret</span>
+<span class="muted">  LOG_LEVEL      </span><span class="fg">info</span>
+
+<span class="muted">  ─── recent jobs ───────────────────────────────────────────</span>
+<span class="dim">  3f1a  </span><span class="ok">success</span><span class="muted">        pr       </span><span class="muted">2h ago</span>
+<span class="dim">  9c20  </span><span class="amber">running</span><span class="muted">        patch    </span><span class="muted">now</span>
+<span class="dim">  8b07  </span><span class="warn">failed-checks</span><span class="muted">  pr       </span><span class="muted">yesterday</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Read-only; <b>e</b> jumps to edit, <b>esc</b> back to the instances menu.</li><li>Job IDs are copy-paste targets for <b>jobs view &lt;id&gt;</b>.</li><li>Long repo / env lists scroll within the section, header pinned.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Header line carries live status: <span class="ok">● active</span> + relative “last run”.</li><li>Counts in section titles: <span class="muted">repositories (2)</span>.</li><li>Secrets never shown — value column reads <span class="dim">••••••••</span> + <span class="warn">secret</span>.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-08" data-screen-label="08">
+  <div class="sec-head"><span class="sec-num">08</span><h2>Edit instance</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">A field picker, not a wall of form inputs. Each row shows its <i>current value</i> on the right, so you edit by recognition. Three rows are doors into dedicated editors (auth, repos, env). <b>pause / resume</b> is a single state toggle that relabels itself.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances edit api-bot</span><span class="term-tag">field picker</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ api-bot ▸ edit</span>
+
+<span class="info">  ? </span><span class="fg">What do you want to change?</span>
+
+<span class="muted">  ─── config ──────────────────────</span>
+<span class="amber">● </span><span class="amber b">deliverable   </span><span class="muted">pr</span>
+  <span class="fg">engine        </span><span class="muted">claude-code</span>
+  <span class="fg">model         </span><span class="muted">default</span>
+  <span class="fg">branch base   </span><span class="muted">main</span>
+<span class="muted">  ─── connections ─────────────────</span>
+  <span class="fg">authentication</span><span class="muted">logged in</span>
+  <span class="fg">repositories  </span><span class="muted">2 repos</span>
+  <span class="fg">env vars      </span><span class="muted">3 vars</span>
+<span class="muted">  ─── state ───────────────────────</span>
+  <span class="fg">pause         </span><span class="muted">running — pause intake</span>
+<span class="muted">  ───  ──────────────────────────</span>
+<span class="muted">  ← </span><span class="muted">done</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Pick a field → focused prompt for just that value → returns here.</li><li><b>authentication / repositories / env vars</b> open their own screens.</li><li><b>← done</b> writes nothing extra; every edit is saved on confirm.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Current value shown muted beside each field — edit by recognition.</li><li>Toggle copy flips with state: <b>pause</b> ⇄ <b>resume</b>.</li><li>“done” not “back” — signals the edit session is complete.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-09" data-screen-label="09">
+  <div class="sec-head"><span class="sec-num">09</span><h2>Instance authentication</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">Auth isolation made visible: the panel states <b>scope: this instance only</b> so it’s obvious nothing is inherited from the host. The action set covers the full lifecycle — switch method, re-login, or log out (which clears credentials and lets a fresh login start clean).</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances edit api-bot · authentication</span><span class="term-tag">isolated</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ api-bot ▸ authentication</span>
+
+<span class="amber">╭─ Authentication · api-bot ─────────────────────────────╮</span>
+<span class="amber">│</span><span class="muted">  status   </span><span class="ok">● logged in</span>                                  <span class="amber">│</span>
+<span class="amber">│</span><span class="muted">  method   </span><span class="fg">subscription (isolated)</span>                      <span class="amber">│</span>
+<span class="amber">│</span><span class="muted">  account  </span><span class="dim">agent-bot@acme.dev</span>                           <span class="amber">│</span>
+<span class="amber">│</span><span class="muted">  scope    </span><span class="dim">this instance only</span>                           <span class="amber">│</span>
+<span class="amber">╰────────────────────────────────────────────────────────╯</span>
+
+<span class="info">  ? </span><span class="fg">Manage authentication</span>
+
+<span class="amber">● </span><span class="amber b">switch      </span><span class="muted">use an API key instead</span>
+  <span class="fg">relogin     </span><span class="muted">re-run the isolated login</span>
+  <span class="fg">logout      </span><span class="muted">clear credentials &amp; data</span>
+<span class="muted">  ───  ──────────────────────────</span>
+<span class="muted">  ← </span><span class="muted">back</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>switch</b> reveals an api-key prompt; <b>logout</b> asks to confirm.</li><li>Login opens an isolated device-code / browser flow — never the host session.</li><li>State refreshes in place after any action.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Status uses the auth vocabulary: <span class="ok">logged in</span> · <span class="info">via api-key</span> · <span class="err">not logged in</span>.</li><li>Explicit <b>(isolated)</b> and <b>scope: this instance only</b>.</li><li><b>logout</b> copy warns it <i>clears credentials &amp; data</i>.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-10" data-screen-label="10">
+  <div class="sec-head"><span class="sec-num">10</span><h2>Env vars editor</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">Secrets are encrypted at rest and shown obfuscated; the <b>secret</b> flag is set per-variable at write time. The set flow is three quick prompts — name, value, secret? — so adding a token is a 10-second job.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances edit api-bot · env</span><span class="term-tag">obfuscated</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ api-bot ▸ env vars</span>
+
+<span class="muted">  ─── environment  ·  3 variables ───────────────────</span>
+<span class="fg">  GITHUB_TOKEN   </span><span class="dim">••••••••••••</span><span class="warn">   secret</span>
+<span class="fg">  NPM_TOKEN      </span><span class="dim">••••••••••••</span><span class="warn">   secret</span>
+<span class="fg">  LOG_LEVEL      </span><span class="info">info</span>
+
+<span class="info">  ? </span><span class="fg">Manage variables</span>
+
+<span class="amber">● </span><span class="amber b">set       </span><span class="muted">add or update a variable</span>
+  <span class="fg">remove    </span><span class="muted">delete a variable</span>
+<span class="muted">  ───  ──────────────────────────</span>
+<span class="muted">  ← </span><span class="muted">back</span>
+
+  <span class="muted">— on “set” —</span>
+<span class="info">  ? </span><span class="fg">Name</span><span class="dim">   API_BASE_URL</span>
+<span class="info">  ? </span><span class="fg">Value</span><span class="dim">  https://api.acme.dev</span>
+<span class="info">  ? </span><span class="fg">Secret? </span><span class="muted">(encrypt &amp; obfuscate)  </span><span class="amber">[Y/n]</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>set</b> on an existing name updates it; new names are created.</li><li>Secret values never echo to the terminal as you type.</li><li><b>remove</b> confirms by name before deleting.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Non-secret values show in <span class="info">plain</span>; secrets as <span class="dim">••••</span> + <span class="warn">secret</span>.</li><li>Default for <b>Secret?</b> is <span class="amber">Y</span> — safe by default.</li><li>Listing always shows the count: <span class="muted">3 variables</span>.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-11" data-screen-label="11">
+  <div class="sec-head"><span class="sec-num">11</span><h2>Repo pool editor</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">An instance can target 0..N repositories. The pool is a flat list with default branches; add/remove are the only verbs. A job picks its repo from this pool, so the pool is the instance’s blast radius.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook instances edit api-bot · repos</span><span class="term-tag">0..N</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ instances ▸ api-bot ▸ repositories</span>
+
+<span class="muted">  ─── repository pool  ·  2 ───────────────────────</span>
+<span class="info">  • </span><span class="fg">acme/web-app</span><span class="muted">       main</span>
+<span class="info">  • </span><span class="fg">acme/design-sys</span><span class="muted">    main</span>
+
+<span class="info">  ? </span><span class="fg">Manage repositories</span>
+
+<span class="amber">● </span><span class="amber b">add     </span><span class="muted">grant access to a repo</span>
+  <span class="fg">remove  </span><span class="muted">revoke a repo</span>
+<span class="muted">  ───  ──────────────────────────</span>
+<span class="muted">  ← </span><span class="muted">back</span>
+
+  <span class="muted">— on “add” —</span>
+<span class="info">  ? </span><span class="fg">Repository </span><span class="muted">(owner/name)  </span><span class="cur">acme/api-gateway▏</span>
+<span class="info">  ? </span><span class="fg">Default branch </span><span class="dim">main</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>add</b> validates the repo against the instance’s auth before saving.</li><li><b>remove</b> lists current repos as a picker.</li><li>An empty pool is allowed — analysis jobs can run without one.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Bullet <span class="info">•</span> for each repo; branch shown muted.</li><li>Prompt hints the format: <span class="muted">(owner/name)</span>.</li><li>Count in the section title: <span class="muted">repository pool · 2</span>.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-12" data-screen-label="12">
+  <div class="sec-head"><span class="sec-num">12</span><h2>Jobs — live list</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">The headline “can’t see what’s happening” fix at the list level. <b>--watch</b> refreshes in place every 2s; the full status vocabulary is color-coded so the eye finds the <span class="warn">awaiting</span> and <span class="err">error</span> rows instantly. This is a prime <b>Textual</b> candidate — a real-time table with row actions.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook jobs --watch</span><span class="term-tag">live · Textual</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ jobs</span>
+
+<span class="amber b">  jobs</span>   <span class="ok">● live</span><span class="muted">   ↻ refreshing every 2s</span>
+
+<span class="muted">  ID    INSTANCE      STATUS             DELIVERABLE   AGE</span>
+<span class="muted">  ────────────────────────────────────────────────────────────────</span>
+<span class="dim">  9c20  </span><span class="fg">api-bot      </span><span class="amber">▸ running         </span><span class="muted">patch        </span><span class="muted">0:42</span>
+<span class="dim">  a18e  </span><span class="fg">api-bot      </span><span class="plan">◷ awaiting_approval</span><span class="muted">pr           </span><span class="muted">3m</span>
+<span class="dim">  3f1a  </span><span class="fg">api-bot      </span><span class="ok">✓ success         </span><span class="muted">pr           </span><span class="muted">2h</span>
+<span class="dim">  8b07  </span><span class="fg">docs-writer  </span><span class="warn">▲ failed-checks   </span><span class="muted">pr           </span><span class="muted">1d</span>
+<span class="dim">  77d1  </span><span class="fg">infra-bot    </span><span class="err">✗ error           </span><span class="muted">commit       </span><span class="muted">1d</span>
+<span class="dim">  5e0c  </span><span class="fg">api-bot      </span><span class="muted">· queued          </span><span class="muted">analysis     </span><span class="muted">—</span>
+
+<span class="muted">  ↵ </span><span class="muted">view</span><span class="muted">   a </span><span class="muted">approve</span><span class="muted">   c </span><span class="muted">cancel</span><span class="muted">   / </span><span class="muted">filter</span><span class="muted">   esc </span><span class="muted">back</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>↵</b> opens detail, <b>a</b> approves an awaiting job, <b>c</b> cancels.</li><li><b>/</b> filters by instance, status, or deliverable.</li><li>Without <b>--watch</b> it prints a static snapshot for CI/pipes.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Status glyphs double the color: <span class="amber">▸</span> running, <span class="plan">◷</span> awaiting, <span class="ok">✓</span>, <span class="warn">▲</span>, <span class="err">✗</span>.</li><li>Running jobs show a live elapsed clock (<b>0:42</b>).</li><li>Header row + rule; no vertical borders keeps it light at 80 cols.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-13" data-screen-label="13">
+  <div class="sec-head"><span class="sec-num">13</span><h2>Job runner & plan approval</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">The core state-feedback fix. A running job shows a <b>stepped rail</b> (clone → plan → edit → checks → deliver) with a compact stats line (elapsed · cost · tokens) and a tail of the agent’s actions — quiet by default, full stream on <code>--follow</code>. When the engine pauses, the job enters <span class="plan">awaiting_approval</span> and the plan is shown inline with <b>approve / edit / reject</b>.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook jobs view 9c20</span><span class="term-tag">live · Textual</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ jobs ▸ 9c20</span>
+
+<span class="amber b">  9c20</span><span class="fg">   api-bot</span><span class="muted">   ·  patch</span><span class="muted">   ·  acme/web-app</span>
+
+<span class="ok">  ✓ clone</span><span class="muted"> ── </span><span class="ok">✓ plan</span><span class="muted"> ── </span><span class="amber">▸ edit</span><span class="muted"> ── </span><span class="muted">· checks</span><span class="muted"> ── </span><span class="muted">· deliver</span>
+
+<span class="amber">  ◷ </span><span class="amber">running</span><span class="fg">   elapsed 0:42</span><span class="muted">   ·  $0.018</span><span class="muted">   ·  12.4k tok</span>
+
+<span class="muted">  ─── agent log ─────────────────────────────────────────────</span>
+<span class="info">  ◆ </span><span class="dim">reading src/build/nightly.ts</span>
+<span class="info">  ◆ </span><span class="dim">found race: cache write not awaited</span>
+<span class="info">  ◆ </span><span class="dim">editing 2 files…</span>
+<span class="amber">  › </span><span class="fg">src/build/nightly.ts</span><span class="ok">   +6 −2</span>
+
+<span class="muted">  follow live: </span><span class="info">agenthook jobs logs 9c20 --follow</span>
+<span class="muted">  ↵ </span><span class="muted">detail</span><span class="muted">   c </span><span class="muted">cancel</span><span class="muted">   esc </span><span class="muted">back</span></pre>
+  </div>
+<div class="lbl" style="margin:18px 0 10px">When the engine pauses for review</div><div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook jobs approve a18e</span><span class="term-tag">plan → approval</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ jobs ▸ a18e ▸ approve</span>
+
+<span class="plan">  ◷ </span><span class="plan">awaiting_approval</span><span class="muted">   the agent paused for review</span>
+
+<span class="plan">╭─ Plan · a18e ────────────────────────────────────────────╮</span>
+<span class="plan">│</span><span class="muted">  1. </span><span class="fg">Add retry wrapper around cache.flush()</span>               <span class="plan">│</span>
+<span class="plan">│</span><span class="muted">  2. </span><span class="fg">Await all writes in nightly build step</span>               <span class="plan">│</span>
+<span class="plan">│</span><span class="muted">  3. </span><span class="fg">Add regression test for the race</span>                     <span class="plan">│</span>
+<span class="plan">│</span>                                                          <span class="plan">│</span>
+<span class="plan">│</span><span class="muted">  touches </span><span class="fg">3 files</span><span class="muted">   ·  </span><span class="plan">opens PR</span><span class="muted">   ·  </span><span class="muted">~$0.04 est</span>           <span class="plan">│</span>
+<span class="plan">╰──────────────────────────────────────────────────────────╯</span>
+
+<span class="info">  ? </span><span class="fg">Approve this plan?</span>
+
+<span class="amber">● </span><span class="amber b">approve   </span><span class="muted">run the plan as proposed</span>
+  <span class="fg">edit      </span><span class="muted">send a note back &amp; replan</span>
+  <span class="fg">reject    </span><span class="muted">stop the job here</span>
+
+<span class="muted">  ↑↓ </span><span class="muted">move</span><span class="muted">   ↵ </span><span class="muted">select</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Step rail: <span class="ok">✓</span> done · <span class="amber">▸</span> running · <span class="muted">·</span> pending.</li><li><b>--follow</b> streams every action; bare view shows the last few.</li><li>Approval is inline — <b>edit</b> lets you send guidance and replan.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Stats line is always one row: <b>elapsed · cost · tokens</b>.</li><li>Diff hunks colored <span class="ok">+6 −2</span>; file paths in fg.</li><li>Plan panel uses the <span class="plan">lilac</span> “thinking” hue, distinct from running amber.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-14" data-screen-label="14">
+  <div class="sec-head"><span class="sec-num">14</span><h2>Sessions — threads across jobs</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">A session is a durable thread keyed by something stable (a ticket like <span class="plan">PROJ-481</span>), so context carries across many jobs over time. The list answers “which threads are alive”; the view shows the thread’s brief plus its full job history, and lets you <b>resume in chat</b> right where it left off.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook sessions</span><span class="term-tag">index</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ sessions</span>
+
+<span class="amber b">  sessions</span><span class="muted">   durable threads shared across jobs</span>
+
+<span class="muted">  THREAD KEY      INSTANCE      JOBS   LAST</span>
+<span class="muted">  ──────────────────────────────────────────────────</span>
+<span class="plan">  PROJ-481       </span><span class="fg">api-bot      </span><span class="muted">4     </span><span class="muted">2h ago</span>
+<span class="plan">  PROJ-455       </span><span class="fg">api-bot      </span><span class="muted">2     </span><span class="muted">yesterday</span>
+<span class="plan">  INFRA-12       </span><span class="fg">infra-bot    </span><span class="muted">7     </span><span class="muted">3d ago</span>
+
+<span class="muted">  ↵ </span><span class="muted">view thread</span><span class="muted">   / </span><span class="muted">filter</span><span class="muted">   esc </span><span class="muted">back</span></pre>
+  </div>
+<div class="lbl" style="margin:18px 0 10px">Opening one thread</div><div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook sessions view PROJ-481</span><span class="term-tag">thread</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ sessions ▸ PROJ-481</span>
+
+<span class="plan b">  PROJ-481</span><span class="fg">   api-bot</span><span class="muted">   ·  4 jobs</span><span class="muted">   ·  opened 6d ago</span>
+
+<span class="muted">  ─── thread context ────────────────────────────────────</span>
+  <span class="dim">“Stabilise the nightly build pipeline.”</span>
+
+<span class="muted">  ─── jobs in this thread ───────────────────────────────</span>
+<span class="dim">  3f1a  </span><span class="ok">✓ success</span><span class="muted">        analysis  </span><span class="muted">6d ago</span>
+<span class="dim">  6a22  </span><span class="ok">✓ success</span><span class="muted">        patch     </span><span class="muted">5d ago</span>
+<span class="dim">  8b07  </span><span class="warn">▲ failed-checks</span><span class="muted">  pr        </span><span class="muted">1d ago</span>
+<span class="dim">  9c20  </span><span class="amber">▸ running</span><span class="muted">        patch     </span><span class="muted">now</span>
+
+<span class="muted">  ↵ </span><span class="muted">open job</span><span class="muted">   r </span><span class="muted">resume in chat</span><span class="muted">   esc </span><span class="muted">back</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li><b>↵</b> opens a thread; inside, <b>↵</b> opens a job, <b>r</b> resumes in chat.</li><li><b>/</b> filters by key or instance.</li><li>Thread keys map to external IDs (tickets, PR numbers).</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Thread key carries the <span class="plan">session lilac</span> throughout.</li><li>Job count + relative “last” give freshness at a glance.</li><li>Context line quotes the thread’s original ask.</li></ul></div>
+  </div>
+</div>
+
+<div class="screen-block" id="s-15" data-screen-label="15">
+  <div class="sec-head"><span class="sec-num">15</span><h2>Interact — chat REPL & shell</h2><span class="sec-rule"></span></div>
+  <p class="sec-note">“Entering an instance” spins up an <b>ephemeral, isolated Docker container</b> per the security model. <b>chat</b> is a multi-turn REPL with the agent (optionally bound to a session thread); <b>shell</b> drops you into bash in the same kind of container. Both are strong <b>Textual</b> candidates for a richer live pane.</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook chat api-bot PROJ-481</span><span class="term-tag">REPL · Textual</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ chat ▸ api-bot ▸ #PROJ-481</span>
+
+<span class="ok">  ◇ </span><span class="ok">container ready</span><span class="muted">   ·  acme/web-app @ main</span><span class="muted">   ·  /exit to leave</span>
+
+<span class="muted">  you  </span><span class="fg">why is the nightly build flaky?</span>
+
+<span class="info">  ◆ api-bot  </span><span class="dim">It’s a race in the cache flush — the write</span>
+             <span class="dim">isn’t awaited, so the build sometimes reads</span>
+             <span class="dim">stale artifacts. Want me to open a patch?</span>
+
+<span class="muted">  you  </span><span class="fg">yes, and add a regression test</span>
+
+<span class="amber">  › </span><span class="cur">▏</span>
+
+<span class="muted">  /exit </span><span class="muted">leave</span><span class="muted">   /help </span><span class="muted">commands</span><span class="muted">   ↑ </span><span class="muted">history</span></pre>
+  </div>
+<div class="lbl" style="margin:18px 0 10px">Or drop straight into a shell</div><div class="term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-cmd"><span class="p">$</span> agenthook shell api-bot</span><span class="term-tag">container</span></div>
+    <pre class="screen"><span class="muted">agenthook ▸ shell ▸ api-bot</span>
+
+<span class="ok">  ◇ </span><span class="ok">ephemeral container</span><span class="muted">   ·  acme/web-app @ main</span><span class="muted">   ·  /exit to leave</span>
+
+<span class="ok">  agent@api-bot</span><span class="muted">:</span><span class="info">/workspace</span><span class="amber">$ </span><span class="fg">git status</span>
+<span class="dim">  On branch </span><span class="dim">agent/nightly-fix</span>
+<span class="dim">  Changes not staged for commit:</span>
+<span class="dim">    modified:   </span><span class="warn">src/build/nightly.ts</span>
+
+<span class="ok">  agent@api-bot</span><span class="muted">:</span><span class="info">/workspace</span><span class="amber">$ </span><span class="cur">▏</span>
+
+  <span class="muted">type /exit to leave  ·  changes here do not persist unless committed</span></pre>
+  </div>
+  <div class="notes">
+    <div class="note-col"><h4>Interaction</h4><ul><li>Multi-turn; <b>↑</b> recalls input history, <b>/help</b> lists slash-commands.</li><li><b>/exit</b> tears down the container and returns to the menu.</li><li>Passing a thread key binds the chat to a durable session.</li></ul></div>
+    <div class="note-col"><h4>Microcopy &amp; hierarchy</h4><ul><li>Agent replies in <span class="info">cyan</span> with a <span class="info">◆</span> marker; your turns are muted-labelled.</li><li>Banner states isolation: <span class="ok">ephemeral container</span>.</li><li>Shell warns: <b>changes don’t persist unless committed</b>.</li></ul></div>
+  </div>
+</div>
+
+<footer>
+  agenthook TUI design spec · monospace mockups for Typer · Rich · questionary · Textual &nbsp;·&nbsp; palette: amber / earth &nbsp;·&nbsp; box: rounded
+</footer>
+
+</div>
+</body>
+</html>

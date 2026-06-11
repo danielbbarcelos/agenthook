@@ -1,9 +1,14 @@
-"""Friendly interactive layer — a persistent, guided menu (DESIGN.md §23).
+"""Friendly interactive layer — the guided TUI (DESIGN.md §23).
 
-Running ``agenthook`` with no subcommand drops into this menu: a hero banner
-(drawn once, on entry) + arrow-key navigation that stays alive until the user
-picks *quit* or presses Ctrl+C twice. The screen is cleared only when entering
-the menu; navigation just scrolls, so you keep the history of what you did.
+Running ``agenthook`` with no subcommand drops into this menu. The design is the
+*Guided* direction from ``design-system/`` (variant A): arrow-key menus, a single
+column, a warm amber/earth palette, and a shared status vocabulary.
+
+Screen-clear rule (design §02): clear + redraw on *big* transitions (entering a
+top section, opening view/edit, launching chat/shell) and keep + append on
+*small* ones (wizard pages, sequences of prompts). Every cleared screen is
+anchored by a dimmed breadcrumb — ``agenthook ▸ instances ▸ api-bot ▸ edit`` — so
+you always know where you are without re-reading scrollback.
 
 Every flow here also has a non-interactive CLI equivalent; the menu just makes
 the common CRUD friendly. It talks to ``instances`` / ``secrets`` / ``store``
@@ -14,12 +19,40 @@ called in-process).
 from __future__ import annotations
 
 import sys
+import time
 
 from . import instances, secrets, store
 
-# Plain-text sentinels — no icons (keep navigation calm and readable).
+# --- Palette (design-system/README.md · ANSI roles) -------------------------
+AMBER = "#d9a441"  # highlight / brand — "you are here / act here"
+SAGE = "#a3be8c"  # ok / success
+CYAN = "#88c0d0"  # info / response
+CLAY = "#d08770"  # warning / awaiting
+RUST = "#bf616a"  # error / failed
+LILAC = "#b48ead"  # plan / session — the "thinking" hue
+STONE = "#6f6a5d"  # muted
+BONE = "#e8e3d8"  # foreground
+
+_MUTED = f"fg:{STONE}"
+
+# Plain-text sentinels — values returned by menu choices.
 _BACK = "back"
 _QUIT = "quit"
+
+# Job status → (glyph, color). One set of colors everywhere (design §01).
+_JOB_VIS = {
+    "queued": ("·", STONE),
+    "running": ("▸", AMBER),
+    "awaiting_approval": ("◷", LILAC),
+    "success": ("✓", SAGE),
+    "failed-checks": ("▲", CLAY),
+    "blocked": ("▲", CLAY),
+    "error": ("✗", RUST),
+    "timeout": ("✗", RUST),
+    "interrupted": ("⊘", STONE),
+    "rejected": ("✗", STONE),
+    "expired": ("·", STONE),
+}
 
 
 def _interactive() -> bool:
@@ -35,28 +68,30 @@ def _version() -> str:
         return "dev"
 
 
+# --- Styling ----------------------------------------------------------------
+
+
 def _style():
-    """Lavender questionary palette (matches the hero)."""
+    """questionary palette — amber brand, cyan question mark, muted separators."""
     import questionary
 
     return questionary.Style(
         [
-            ("qmark", "fg:#b48ead bold"),
+            ("qmark", f"fg:{CYAN} bold"),
             ("question", "bold"),
-            ("pointer", "fg:#b48ead bold"),
-            ("highlighted", "fg:#b48ead"),
-            ("selected", "fg:#a3be8c"),
-            ("answer", "fg:#88c0d0"),
-            ("separator", "fg:#6b7280"),
+            ("pointer", f"fg:{AMBER} bold"),
+            ("highlighted", f"fg:{AMBER} bold"),
+            ("selected", f"fg:{SAGE}"),
+            ("answer", f"fg:{CYAN}"),
+            ("separator", f"fg:{STONE}"),
+            ("instruction", f"fg:{STONE}"),
+            ("text", f"fg:{BONE}"),
         ]
     )
 
 
-_MUTED = "fg:#6b7280"
-
-
 def _back_choice(label: str = "back"):
-    """A muted '←' back/quit entry, set apart from the real actions."""
+    """A muted '←' back/quit entry, always the last row, set apart from actions."""
     import questionary
 
     return questionary.Choice(title=[(_MUTED, f"←  {label}")], value=label)
@@ -65,7 +100,106 @@ def _back_choice(label: str = "back"):
 def _sep(label: str = ""):
     import questionary
 
-    return questionary.Separator(f"  {label}" if label else " ")
+    if not label:
+        return questionary.Separator("  ───  ──────────────────────────")
+    pad = max(0, 30 - len(label))
+    return questionary.Separator(f"  ─── {label} " + "─" * pad)
+
+
+def _action(label: str, desc: str = "", value: str | None = None):
+    """A menu row: action name (highlights amber when selected) + muted hint."""
+    import questionary
+
+    title: list = [("", f"{label:<13}")]
+    if desc:
+        title.append((_MUTED, desc))
+    return questionary.Choice(title=title, value=value or label)
+
+
+def _select(message: str, choices: list):
+    import questionary
+
+    print()  # breathing room above every menu
+    return questionary.select(
+        message, choices=choices, qmark="?", pointer="●", style=_style()
+    ).ask()
+
+
+def confirm(prompt: str) -> bool:
+    if not _interactive():
+        return True
+    import questionary
+
+    return bool(questionary.confirm(prompt, default=False, qmark="?", style=_style()).ask())
+
+
+# --- Breadcrumb & clear -----------------------------------------------------
+
+
+def _crumb(console, *parts: str, right: str | None = None) -> None:
+    trail = " ▸ ".join(["agenthook", *parts])
+    line = f"[{STONE}]{trail}[/]"
+    if right:
+        line += f"   [{STONE}]{right}[/]"
+    console.print(line, highlight=False)
+
+
+def _clear(console, *parts: str, right: str | None = None) -> None:
+    """A 'big' transition: clear, then anchor with the breadcrumb."""
+    console.clear()
+    _crumb(console, *parts, right=right)
+
+
+# --- Time helpers -----------------------------------------------------------
+
+
+def _ago(ts: float | None) -> str:
+    if not ts:
+        return "—"
+    d = time.time() - ts
+    if d < 60:
+        return "now"
+    if d < 3600:
+        return f"{int(d // 60)}m ago"
+    if d < 86400:
+        return f"{int(d // 3600)}h ago"
+    return f"{int(d // 86400)}d ago"
+
+
+def _elapsed(job) -> str:
+    start = job.started_at or job.created_at
+    end = job.finished_at or time.time()
+    s = int(max(0, end - start))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+# --- Status badges ----------------------------------------------------------
+
+
+def _job_badge(status: str) -> str:
+    glyph, color = _JOB_VIS.get(status, ("·", STONE))
+    return f"[{color}]{glyph} {status}[/]"
+
+
+def _inst_badge(inst) -> str:
+    if inst.paused:
+        return f"[{STONE}]⏸ paused[/]"
+    try:
+        from . import engine_auth
+
+        if engine_auth.is_authenticated(inst) is False:
+            return f"[{RUST}]⚠ no auth[/]"
+    except Exception:  # noqa: BLE001
+        pass
+    return f"[{SAGE}]● active[/]"
+
+
+def _auth_badge(state) -> str:
+    if state is True:
+        return f"[{SAGE}]● logged in[/]"
+    if state is False:
+        return f"[{RUST}]not logged in[/]"
+    return f"[{CYAN}]via api-key[/]"
 
 
 # --- Reusable pickers (used by the CLI too) ---------------------------------
@@ -77,9 +211,7 @@ def pick_instance() -> str:
         raise SystemExit("no instances; create one with `agenthook instance add`")
     if len(names) == 1 or not _interactive():
         return names[0]
-    import questionary
-
-    return questionary.select("Pick an instance:", choices=names).ask() or names[0]
+    return _pick_instance_or_none(None, "Pick an instance:") or names[0]
 
 
 def pick_job() -> str:
@@ -88,78 +220,113 @@ def pick_job() -> str:
         raise SystemExit("no jobs yet")
     if not _interactive():
         return jobs[0].id
+    choice = _select("Pick a job:", [_job_choice(j) for j in jobs] + [_sep(), _back_choice()])
+    return choice if (choice and choice != _BACK) else jobs[0].id
+
+
+def _job_choice(j):
     import questionary
 
-    choices = [f"{j.id}  {j.instance}  {j.status.value}" for j in jobs]
-    ans = questionary.select("Pick a job:", choices=choices).ask()
-    return (ans or choices[0]).split()[0]
+    glyph, color = _JOB_VIS.get(j.status.value, ("·", STONE))
+    title = [
+        (f"fg:{STONE}", f"{j.id:<14}"),
+        ("", f"{j.instance:<14}"),
+        (f"fg:{color}", f"{glyph} {j.status.value:<18}"),
+        (_MUTED, f"{j.deliverable.value:<10}{_ago(j.created_at)}"),
+    ]
+    return questionary.Choice(title=title, value=j.id)
 
 
-def confirm(prompt: str) -> bool:
-    if not _interactive():
-        return True
+def _pick_instance_or_none(console, prompt: str = "Which instance?"):
     import questionary
 
-    return bool(questionary.confirm(prompt, default=False, style=_style()).ask())
+    names = instances.list_names()
+    if not names:
+        if console:
+            console.print(f"[{CLAY}]no instances yet.[/]")
+        return None
+    choices = []
+    for n in names:
+        try:
+            inst = instances.load(n)
+            desc = f"{inst.engine} · {inst.deliverable}"
+        except Exception:  # noqa: BLE001
+            desc = ""
+        choices.append(
+            questionary.Choice(title=[("", f"{n:<18}"), (_MUTED, desc)], value=n)
+        )
+    return _select(prompt, choices + [_sep(), _back_choice()])
 
 
-# --- Banner ------------------------------------------------------------------
+# --- Banner & main menu -----------------------------------------------------
+
+
+def _job_counts() -> dict:
+    counts = {"running": 0, "queued": 0}
+    for j in store.list_jobs(limit=500):
+        if j.status.value in counts:
+            counts[j.status.value] += 1
+    return counts
+
+
+def _server_up(host: str, port: int) -> bool:
+    import socket
+
+    target = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    try:
+        with socket.create_connection((target, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def _banner(console) -> None:
-    """A minimal hero in the local-server style: a small node logo + name,
-    version and tagline inside a rounded lavender box, with a dim status line
-    underneath. Drawn once, on entry."""
-    from rich.panel import Panel
+    """Drawn once on entry. The node mark reads as a webhook → agent chain; the
+    status line answers 'is anything running, is the server up' before any key."""
     from rich.text import Text
 
     try:
         n_inst = len(instances.list_names())
     except Exception:  # noqa: BLE001
         n_inst = 0
+    counts = _job_counts()
     try:
-        n_jobs = len(store.list_jobs(limit=100000))
+        from .config import load_config
+
+        cfg = load_config()
+        up = _server_up(cfg.host, cfg.port)
+        port = cfg.port
     except Exception:  # noqa: BLE001
-        n_jobs = 0
+        up, port = False, 8080
 
-    logo = ["●─╮", "│ │", "├─●", "│ │", "●─╯"]
-    meta = ["", "agenthook", f"v{_version()}", "agentic task runner", ""]
+    logo = ["●─╮", "  ╰─●─╮", "      ╰─●"]
+    meta = [
+        ("", ""),
+        (f"agenthook  [{STONE}]v{_version()}", "bold white"),
+        (f"[{STONE}]self-hosted agent task runner", "dim"),
+    ]
+    art = Text()
+    for i in range(3):
+        art.append(f"{logo[i]:<10}", style=f"bold {AMBER}")
+        art.append("  ")
+        art.append(Text.from_markup(meta[i][0]))
+        if i < 2:
+            art.append("\n")
+    console.print()
+    console.print(art)
+    console.print()
 
-    body = Text()
-    for i in range(5):
-        body.append(logo[i], style="bold #b48ead")
-        body.append("   ")
-        if meta[i] == "agenthook":
-            body.append(meta[i], style="bold white")
-        else:
-            body.append(meta[i], style="dim")
-        if i < 4:
-            body.append("\n")
-
-    console.print(Panel(body, border_style="#b48ead", padding=(1, 3), expand=False))
+    srv = f"[{SAGE}]● up[/] [{STONE}]:{port}[/]" if up else f"[{STONE}]○ down[/]"
     console.print(
-        f"  [dim]{n_inst} instance(s) · {n_jobs} job(s)   ·   "
-        f"↑↓ move · Enter · Ctrl+C 2× to quit[/]",
+        f"[{BONE}]{n_inst} instance(s)[/][{STONE}] · [/]"
+        f"[{AMBER}]{counts['running']} running[/][{STONE}] · [/]"
+        f"[{STONE}]{counts['queued']} queued[/][{STONE}] · [/]"
+        f"[{BONE}]server[/] {srv}",
         highlight=False,
     )
-    console.print()
-
-
-def _pause(console) -> None:
-    import questionary
-
-    questionary.press_any_key_to_continue("  Enter to go back…").ask()
-    console.print()
-
-
-def _select(message: str, choices: list):
-    import questionary
-
-    print()  # breathing room above every menu
-    return questionary.select(message, choices=choices, qmark="●", style=_style()).ask()
-
-
-# --- Main loop ---------------------------------------------------------------
+    console.print(
+        f"[{STONE}]↑↓ move · ↵ select · / filter · Ctrl+C 2× to quit[/]", highlight=False
+    )
 
 
 def main_menu() -> None:
@@ -170,19 +337,26 @@ def main_menu() -> None:
         console.print("agenthook — run `agenthook --help` for commands.")
         return
 
-    console.clear()  # the only clear: on entry
+    console.clear()  # the only unconditional clear: on entry
     _banner(console)
     interrupts = 0
     while True:
         choice = _select(
-            "What would you like to do?",
-            choices=["instances", "jobs", "sessions", _sep(), _back_choice(_QUIT)],
+            "Where to?",
+            choices=[
+                _action("instances", "register, configure & run agents"),
+                _action("jobs", "watch and review executions"),
+                _action("sessions", "durable threads across jobs"),
+                _action("serve", "start the webhook server"),
+                _sep(),
+                _back_choice(_QUIT),
+            ],
         )
         if choice is None:  # Ctrl+C on the top menu
             interrupts += 1
             if interrupts >= 2:
                 break
-            console.print("[dim]Ctrl+C again to quit, or pick an option.[/]")
+            console.print(f"[{STONE}]Ctrl+C again to quit, or pick an option.[/]")
             continue
         interrupts = 0
         if choice == _QUIT:
@@ -190,34 +364,67 @@ def main_menu() -> None:
         if choice == "instances":
             _instances_menu(console)
         elif choice == "jobs":
-            _show_jobs(console)
-            _pause(console)
+            _jobs_menu(console)
         elif choice == "sessions":
-            _show_sessions(console)
-            _pause(console)
+            _sessions_menu(console)
+        elif choice == "serve":
+            _serve(console)
+        # back from a submenu: redraw the banner so the home screen feels fresh
+        _clear_home(console)
 
-    console.print("bye.")
+    console.print(f"[{STONE}]bye.[/]")
 
 
-# --- Instances submenu -------------------------------------------------------
+def _clear_home(console) -> None:
+    console.clear()
+    _banner(console)
+
+
+# --- serve ------------------------------------------------------------------
+
+
+def _serve(console) -> None:
+    from .config import load_config
+
+    cfg = load_config()
+    _clear(console, "serve")
+    console.print(
+        f"\n  [{BONE}]Start the webhook server on[/] "
+        f"[{AMBER}]http://{cfg.host}:{cfg.port}[/][{STONE}] — Ctrl+C to stop.[/]\n"
+    )
+    if not confirm("Start serving now?"):
+        return
+    try:
+        import uvicorn
+
+        store.init_db()
+        console.print(f"[{SAGE}]agenthook[/] serving on http://{cfg.host}:{cfg.port}\n")
+        uvicorn.run("agenthook.server:app", host=cfg.host, port=cfg.port, workers=1, log_level="info")
+    except KeyboardInterrupt:
+        console.print(f"\n[{STONE}]server stopped.[/]")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[{RUST}]error:[/] {exc}")
+
+
+# --- Instances submenu ------------------------------------------------------
 
 
 def _instances_menu(console) -> None:
     while True:
+        _clear(console, "instances")
         choice = _select(
-            "Instances — what would you like?",
+            "instances — pick an action",
             choices=[
                 _sep("interact"),
-                "chat",
-                "shell (container)",
+                _action("chat", "talk to the agent in a container"),
+                _action("shell", "open a bash shell in a container"),
                 _sep("manage"),
-                "add",
-                "view",
-                "edit",
-                "env vars",
-                _sep("list / remove"),
-                "list",
-                "delete",
+                _action("add", "register a new instance"),
+                _action("view", "inspect config, repos, env & jobs"),
+                _action("edit", "change config or authentication"),
+                _sep("list · remove"),
+                _action("list", "all instances at a glance"),
+                _action("remove", "delete an instance"),
                 _sep(),
                 _back_choice(),
             ],
@@ -227,185 +434,324 @@ def _instances_menu(console) -> None:
         if choice == "chat":
             name = _pick_instance_or_none(console, "Chat with which instance?")
             if name and name != _BACK:
+                _clear(console, "chat", name)
                 from . import chat
 
                 chat.repl(name, console=console)
-        elif choice == "shell (container)":
+        elif choice == "shell":
             name = _pick_instance_or_none(console, "Open a shell for which instance?")
             if name and name != _BACK:
+                _clear(console, "shell", name)
                 from . import shell as shell_mod
 
                 try:
                     shell_mod.shell(name)
                 except Exception as exc:  # noqa: BLE001
-                    console.print(f"[red]error:[/] {exc}")
+                    console.print(f"[{RUST}]error:[/] {exc}")
+                _pause(console)
         elif choice == "add":
             _instance_add(console)
         elif choice == "view":
             _instance_view(console)
         elif choice == "edit":
             _instance_edit(console)
-        elif choice == "env vars":
-            name = _pick_instance_or_none(console, "Env for which instance?")
-            if name and name != _BACK:
-                _edit_env(console, name)
-        elif choice == "delete":
+        elif choice == "remove":
             _instance_delete(console)
         elif choice == "list":
+            _clear(console, "instances", "list")
             _show_instances(console)
+            _pause(console)
 
 
-def _pick_instance_or_none(console, prompt: str = "Which instance?"):
-    names = instances.list_names()
-    if not names:
-        console.print("[yellow]no instances yet.[/]")
-        return None
-    return _select(prompt, choices=names + [_sep(), _back_choice()])
+def _pause(console) -> None:
+    import questionary
+
+    questionary.press_any_key_to_continue("  Enter to continue…").ask()
+
+
+# --- Add instance — guided wizard (design §06) ------------------------------
 
 
 def _instance_add(console) -> None:
     import questionary
-    from rich.panel import Panel
-
-    from .instances import Instance, _derive_repo_name
-
-    style = _style()
-    name = questionary.text("Instance name (slug):", qmark="●", style=style).ask()
-    if not name:
-        return
-    if instances.exists(name):
-        console.print(f"[red]instance {name!r} already exists.[/]")
-        return
 
     from .engines import available as engines_available
+    from .instances import Instance, _derive_repo_name
+    from .models import Deliverable
 
-    engine = _select("Engine:", choices=engines_available() or ["claude"])
-    if engine is None:
-        return
-    engine_auth = _select("Engine auth:", choices=["subscription", "api-key"])
-    if engine_auth is None:
-        return
-    # Deliverable is decided per-request (the POST/CLI says what to do); the
-    # instance only carries a safe fallback for requests that omit it.
-    deliverable = "analysis"
-    model = questionary.text(
-        "Model (optional, Enter to skip):", qmark="●", style=style
-    ).ask() or None
-    branch = questionary.text(
-        "Base branch:", default="main", qmark="●", style=style
-    ).ask() or "main"
+    style = _style()
+    steps = [
+        ("name", "name"),
+        ("engine", "engine"),
+        ("deliverable", "deliverable"),
+        ("auth", "auth method"),
+        ("model", "model"),
+        ("branch", "branch base"),
+        ("repos", "repositories"),
+        ("key", "encryption key"),
+    ]
+    total = len(steps)
+    vals: dict = {"repos": []}
 
-    repos: list[dict] = []
-    while questionary.confirm(
-        f"Add a repo to the pool? ({len(repos)} so far)", default=False, qmark="●", style=style
-    ).ask():
-        spec = questionary.text("repo (name=url or url):", qmark="●", style=style).ask()
-        if not spec:
-            break
-        if "=" in spec:
-            rname, url = spec.split("=", 1)
-            repos.append({"name": rname.strip(), "url": url.strip()})
-        else:
-            repos.append({"name": _derive_repo_name(spec), "url": spec.strip()})
+    def rail(i: int) -> None:
+        _clear(console, "instances", "add", right=f"step {i + 1} / {total}")
+        console.print()
+        for j, (key, label) in enumerate(steps):
+            if j < i:
+                shown = _wizard_value(key, vals)
+                console.print(f"  [{SAGE}]✓[/] [dim]{label:<16}[/][{STONE}]{shown}[/]")
+            elif j == i:
+                console.print(f"  [{AMBER}]▸[/] [{AMBER} bold]{label:<16}[/]")
+            else:
+                console.print(f"  [{STONE}]·  {label:<16}[/]")
+        console.print()
 
+    i = 0
+    while i < total - 1:  # steps 0..6 collect; step 7 (key) is handled after save
+        rail(i)
+        key = steps[i][0]
+        if key == "name":
+            ans = questionary.text("Instance name (slug):", qmark="?", style=style).ask()
+            if ans is None:
+                return
+            if not ans:
+                i = 0
+                continue
+            if instances.exists(ans):
+                console.print(f"[{RUST}]instance {ans!r} already exists.[/]")
+                _pause(console)
+                continue
+            vals["name"] = ans
+        elif key == "engine":
+            ans = _select("Engine:", (engines_available() or ["claude"]))
+            if ans is None:
+                i -= 1
+                continue
+            vals["engine"] = ans
+        elif key == "deliverable":
+            console.print(f"  [{STONE}]Default for requests that don't specify one.[/]")
+            ans = _select("Default deliverable:", [d.value for d in Deliverable])
+            if ans is None:
+                i -= 1
+                continue
+            vals["deliverable"] = ans
+        elif key == "auth":
+            console.print(f"  [{STONE}]Each instance logs in on its own — never the host's.[/]")
+            ans = _select(
+                "How should this instance authenticate?",
+                [
+                    _action("subscription", "log in to a provider account (isolated)"),
+                    _action("api-key", "paste a provider API key"),
+                ],
+            )
+            if ans is None:
+                i -= 1
+                continue
+            vals["auth"] = ans
+        elif key == "model":
+            ans = questionary.text(
+                "Model (optional, Enter to skip):", qmark="?", style=style
+            ).ask()
+            if ans is None:
+                i -= 1
+                continue
+            vals["model"] = ans or None
+        elif key == "branch":
+            ans = questionary.text("Base branch:", default="main", qmark="?", style=style).ask()
+            if ans is None:
+                i -= 1
+                continue
+            vals["branch"] = ans or "main"
+        elif key == "repos":
+            if not _wizard_repos(console, vals, _derive_repo_name):
+                i -= 1
+                continue
+        i += 1
+
+    # Build & save the instance, then the emphatic one-time key step (8/8).
     inst = Instance(
-        name=name,
-        engine=engine,
-        engine_auth=engine_auth,
-        deliverable=deliverable,
-        model=model,
-        branch_base=branch,
-        repos=repos,
+        name=vals["name"],
+        engine=vals["engine"],
+        engine_auth=vals["auth"],
+        deliverable=vals.get("deliverable", "analysis"),
+        model=vals.get("model"),
+        branch_base=vals.get("branch", "main"),
+        repos=vals.get("repos", []),
     )
     try:
         instances.save(inst)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]error:[/] {exc}")
+        console.print(f"[{RUST}]error:[/] {exc}")
+        _pause(console)
         return
     key, fp = secrets.generate_key(inst)
     inst.key_fingerprint = fp
     instances.save(inst)
+    _wizard_key_step(console, total, key, fp)
+
+    # Per-instance auth — never inherited from the host's ambient login.
+    if inst.engine_auth == "api-key":
+        _set_api_key(console, inst)
+    else:
+        console.print(
+            f"\n  [{STONE}]auth = subscription (isolated). Log this instance in:[/]\n"
+            f"  [{AMBER}]agenthook login {inst.name}[/]   "
+            f"[{STONE}]or instances ▸ edit ▸ authentication.[/]"
+        )
+    console.print(f"\n  [{SAGE}]✓ instance [bold]{inst.name}[/] created.[/]")
+    _pause(console)
+
+
+def _wizard_value(key: str, vals: dict) -> str:
+    if key == "repos":
+        n = len(vals.get("repos", []))
+        return f"{n} repo(s)" if n else "none"
+    if key == "model":
+        return vals.get("model") or "default"
+    return str(vals.get(key, ""))
+
+
+def _wizard_repos(console, vals, derive) -> bool:
+    """Sub-loop to build the repo pool. Returns False to step back."""
+    import questionary
+
+    style = _style()
+    while True:
+        repos = vals.get("repos", [])
+        if repos:
+            console.print(f"  [{STONE}]pool:[/] " + ", ".join(r["name"] for r in repos))
+        act = _select(
+            "Repositories (optional):",
+            [
+                _action("add", "add a repo to the pool"),
+                _action("done", "continue", value="done"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
+        if act is None or act == _BACK:
+            return False
+        if act == "done":
+            return True
+        spec = questionary.text("repo (name=url or url):", qmark="?", style=style).ask()
+        if not spec:
+            continue
+        if "=" in spec:
+            rname, url = spec.split("=", 1)
+            entry = {"name": rname.strip(), "url": url.strip()}
+        else:
+            entry = {"name": derive(spec), "url": spec.strip()}
+        vals.setdefault("repos", []).append(entry)
+
+
+def _wizard_key_step(console, total: int, key: str, fp: str) -> None:
+    from rich.panel import Panel
+
+    _clear(console, "instances", "add", right=f"step {total} / {total}")
+    console.print(f"\n  [{CLAY}]▲ Encryption key — shown once[/]\n")
     console.print(
         Panel(
-            f"[bold]Instance [cyan]{name}[/] created.[/]\n\n"
-            f"[yellow]Encryption key (shown ONCE — keep it safe):[/]\n"
-            f"[bold]{key}[/]\n\nfingerprint: {fp}",
-            title="save this key",
-            border_style="yellow",
+            f"[{AMBER} bold]{key}[/]\n\n"
+            f"[dim]Encrypts this instance's secrets at rest.\n"
+            f"It cannot be shown again — losing it means re-entering\n"
+            f"every secret for this instance.[/]\n\n"
+            f"[{STONE}]fingerprint: {fp}[/]",
+            title="Save this key now",
+            border_style=CLAY,
+            padding=(1, 3),
+            expand=False,
         )
     )
-    # Per-instance auth — never inherited from the host's ambient login.
-    if engine_auth == "api-key":
-        _set_api_key(console, inst)
-    else:  # subscription
-        console.print(
-            "[dim]auth = subscription (isolated from the host). Log this instance in:[/]\n"
-            f"  [bold]agenthook login {name}[/]\n"
-            "[dim]Each instance has its own login; the host's ~/.claude is never used.[/]"
-        )
+    import questionary
+
+    questionary.press_any_key_to_continue(
+        "  Enter once you've saved it…", style=_style()
+    ).ask()
+
+
+# --- View instance (design §07) ---------------------------------------------
 
 
 def _instance_view(console) -> None:
-    import json
-
-    from rich.table import Table
-
     name = _pick_instance_or_none(console, "View which instance?")
     if not name or name == _BACK:
         return
     inst = instances.load(name)
+    _clear(console, "instances", name)
+    console.print()
+    console.print(f"  {_inst_badge(inst)}  [{AMBER} bold]{name}[/]")
+    console.print()
 
-    info = Table("field", "value", title=f"instance: {name}", title_style="bold cyan")
-    info.add_row("engine", inst.engine)
-    info.add_row("engine_auth", inst.engine_auth)
-    info.add_row("deliverable", inst.deliverable)
-    info.add_row("model", inst.model or "-")
-    info.add_row("branch_base", inst.branch_base)
-    info.add_row("paused", "[red]yes[/]" if inst.paused else "no")
-    console.print(info)
+    _section(console, "config")
+    _kv(console, "engine", inst.engine)
+    _kv(console, "auth", inst.engine_auth)
+    _kv(console, "deliverable", inst.deliverable)
+    _kv(console, "branch base", inst.branch_base)
+    _kv(console, "model", inst.model or "default", muted=not inst.model)
 
     repos = inst.resolved_repos()
+    _section(console, f"repositories  ({len(repos)})")
     if repos:
-        rt = Table("repo", "url", "branch_base", title="repo pool")
         for r in repos:
-            rt.add_row(r.name, r.url, r.branch_base)
-        console.print(rt)
+            console.print(f"  [{CYAN}]•[/] [{BONE}]{r.name:<22}[/][{STONE}]{r.branch_base}[/]")
     else:
-        console.print("[dim]no repos in the pool.[/]")
+        console.print(f"  [{STONE}]no repos in the pool.[/]")
 
     try:
         items = secrets.get_backend(inst).items(inst)
     except Exception:  # noqa: BLE001
         items = []
+    _section(console, f"env  ({len(items)}, encrypted)")
     if items:
-        et = Table("env", "value", "secret", title="environment variables")
         for ev in items:
-            shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
-            et.add_row(ev.name, shown, "yes" if ev.secret else "no")
-        console.print(et)
+            if ev.secret:
+                console.print(
+                    f"  [{BONE}]{ev.name:<16}[/][dim]••••••••••••[/][{CLAY}]   secret[/]"
+                )
+            else:
+                console.print(f"  [{BONE}]{ev.name:<16}[/][{BONE}]{ev.value}[/]")
+    else:
+        console.print(f"  [{STONE}]no variables.[/]")
 
-    jobs = [j for j in store.list_jobs(limit=50) if j.instance == name][:8]
+    jobs = [j for j in store.list_jobs(instance=name, limit=50)][:6]
+    _section(console, "recent jobs")
     if jobs:
-        jt = Table("job", "status", "deliverable", title="recent jobs")
         for j in jobs:
-            jt.add_row(j.id, j.status.value, j.deliverable.value)
-        console.print(jt)
-    if not (repos or items or jobs):
-        console.print(f"[dim]{json.dumps(inst.to_dict(), default=str)}[/]")
+            console.print(
+                f"  [{STONE}]{j.id:<14}[/]{_job_badge(j.status.value):<24} "
+                f"[{STONE}]{j.deliverable.value:<10}{_ago(j.created_at)}[/]"
+            )
+    else:
+        console.print(f"  [{STONE}]no jobs yet.[/]")
+    _pause(console)
+
+
+def _section(console, title: str) -> None:
+    pad = max(0, 56 - len(title))
+    console.print(f"\n  [{STONE}]─── {title} {'─' * pad}[/]")
+
+
+def _kv(console, key: str, value: str, muted: bool = False) -> None:
+    color = STONE if muted else BONE
+    console.print(f"  [{STONE}]{key:<14}[/][{color}]{value}[/]")
+
+
+# --- Delete instance --------------------------------------------------------
 
 
 def _instance_delete(console) -> None:
-    name = _pick_instance_or_none(console, "Delete which instance?")
+    name = _pick_instance_or_none(console, "Remove which instance?")
     if not name or name == _BACK:
         return
     if not confirm(f"Delete {name!r} and its secrets? This is irreversible."):
-        console.print("cancelled.")
+        console.print(f"[{STONE}]cancelled.[/]")
         return
     instances.delete(name)
-    console.print(f"[green]deleted[/] {name}")
+    console.print(f"[{SAGE}]✓ removed[/] {name}")
+    _pause(console)
 
 
-# --- Instance edit -----------------------------------------------------------
+# --- Edit instance (design §08) ---------------------------------------------
 
 
 def _instance_edit(console) -> None:
@@ -414,33 +760,45 @@ def _instance_edit(console) -> None:
         return
     while True:
         inst = instances.load(name)
-        console.print(
-            f"[bold]Editing [cyan]{name}[/][/]  "
-            f"(engine={inst.engine}, auth={inst.engine_auth}, "
-            f"deliverable={inst.deliverable}, repos={len(inst.resolved_repos())}, "
-            f"{'[red]paused[/]' if inst.paused else 'active'})"
+        _clear(console, "instances", name, "edit")
+        auth_v = "logged in" if _auth_state(inst) is True else (
+            "via api-key" if _auth_state(inst) is None else "not logged in"
         )
         field = _select(
-            "Which field?",
+            "What do you want to change?",
             choices=[
-                "deliverable", "engine", "authentication", "model", "branch base",
-                "repos (pool)", "env vars",
-                "pause / resume", _sep(), _back_choice(),
+                _sep("config"),
+                _action("deliverable", inst.deliverable),
+                _action("engine", inst.engine),
+                _action("model", inst.model or "default"),
+                _action("branch base", inst.branch_base, value="branch base"),
+                _sep("connections"),
+                _action("authentication", auth_v),
+                _action("repositories", f"{len(inst.resolved_repos())} repos"),
+                _action("env vars", f"{len(_env_items(inst))} vars", value="env vars"),
+                _sep("state"),
+                _action(
+                    "resume" if inst.paused else "pause",
+                    "paused — resume intake" if inst.paused else "running — pause intake",
+                    value="pause",
+                ),
+                _sep(),
+                _back_choice("done"),
             ],
         )
-        if field is None or field == _BACK:
+        if field is None or field == "done":
             return
         if field == "deliverable":
             from .models import Deliverable
 
-            val = _select("New deliverable:", choices=[d.value for d in Deliverable])
+            val = _select("New deliverable:", [d.value for d in Deliverable])
             if val:
                 inst.deliverable = val
                 _save_inst(console, inst)
         elif field == "engine":
             from .engines import available as engines_available
 
-            val = _select("New engine:", choices=engines_available() or ["claude"])
+            val = _select("New engine:", engines_available() or ["claude"])
             if val:
                 inst.engine = val
                 _save_inst(console, inst)
@@ -450,7 +808,7 @@ def _instance_edit(console) -> None:
             import questionary
 
             val = questionary.text(
-                "Model (empty = none):", default=inst.model or "", qmark="●", style=_style()
+                "Model (empty = none):", default=inst.model or "", qmark="?", style=_style()
             ).ask()
             inst.model = val or None
             _save_inst(console, inst)
@@ -458,27 +816,44 @@ def _instance_edit(console) -> None:
             import questionary
 
             val = questionary.text(
-                "Base branch:", default=inst.branch_base, qmark="●", style=_style()
+                "Base branch:", default=inst.branch_base, qmark="?", style=_style()
             ).ask()
             if val:
                 inst.branch_base = val
                 _save_inst(console, inst)
-        elif field == "repos (pool)":
+        elif field == "repositories":
             _edit_repos(console, name)
         elif field == "env vars":
             _edit_env(console, name)
-        elif field.startswith("pause"):
-            instances.set_paused(name, not inst.paused,
-                                 "paused manually" if not inst.paused else None)
-            console.print("[green]ok[/]")
+        elif field == "pause":
+            instances.set_paused(
+                name, not inst.paused, "paused manually" if not inst.paused else None
+            )
+            console.print(f"[{SAGE}]ok[/]")
+
+
+def _auth_state(inst):
+    try:
+        from . import engine_auth
+
+        return engine_auth.is_authenticated(inst)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _env_items(inst):
+    try:
+        return secrets.get_backend(inst).items(inst)
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _save_inst(console, inst) -> None:
     try:
         instances.save(inst)
-        console.print("[green]saved.[/]")
+        console.print(f"[{SAGE}]✓ saved.[/]")
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]save error:[/] {exc}")
+        console.print(f"[{RUST}]save error:[/] {exc}")
 
 
 def _set_api_key(console, inst) -> None:
@@ -489,80 +864,105 @@ def _set_api_key(console, inst) -> None:
     names = get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]
     key_name = names[0]
     val = questionary.password(
-        f"{key_name} (stored as an encrypted instance secret):", qmark="●", style=_style()
+        f"{key_name} (stored as an encrypted instance secret):", qmark="?", style=_style()
     ).ask()
     if val:
         secrets.get_backend(inst).set(inst, key_name, val, True)
-        console.print(f"[green]{key_name} saved (encrypted).[/]")
+        console.print(f"[{SAGE}]✓ {key_name} saved (encrypted).[/]")
     else:
-        console.print("[yellow]cancelled.[/]")
+        console.print(f"[{CLAY}]cancelled.[/]")
+
+
+# --- Instance authentication (design §09) -----------------------------------
 
 
 def _edit_auth(console, name: str) -> None:
+    from rich.panel import Panel
+
     from . import engine_auth
 
     while True:
         inst = instances.load(name)
-        st = engine_auth.is_authenticated(inst)
-        status = (
-            "[green]logged in[/]" if st is True
-            else "[yellow]not logged in[/]" if st is False
-            else "[dim]via api-key (secret)[/]"
-        )
+        state = engine_auth.is_authenticated(inst)
+        _clear(console, "instances", name, "authentication")
+        console.print()
         console.print(
-            f"[bold]auth for [cyan]{name}[/][/]  "
-            f"engine={inst.engine} · method={inst.engine_auth} · {status}"
+            Panel(
+                f"[{STONE}]status   [/]{_auth_badge(state)}\n"
+                f"[{STONE}]method   [/][{BONE}]{inst.engine_auth}"
+                f"{' (isolated)' if inst.engine_auth == 'subscription' else ''}[/]\n"
+                f"[{STONE}]engine   [/][{BONE}]{inst.engine}[/]\n"
+                f"[{STONE}]scope    [/][dim]this instance only[/]",
+                title=f"Authentication · {name}",
+                border_style=AMBER,
+                padding=(0, 2),
+                expand=False,
+            )
         )
-        first = "log in (isolated)" if inst.engine_auth == "subscription" else "set / change api-key"
+        is_sub = inst.engine_auth == "subscription"
+        first = (
+            _action("relogin", "re-run the isolated login")
+            if is_sub
+            else _action("set key", "set / change the api-key", value="set key")
+        )
         act = _select(
-            "Authentication:",
+            "Manage authentication",
             choices=[
                 first,
-                "switch method (subscription ↔ api-key)",
-                "log out / wipe data",
-                _sep(), _back_choice(),
+                _action("switch", "use the other method", value="switch"),
+                _action("logout", "clear credentials & data", value="logout"),
+                _sep(),
+                _back_choice(),
             ],
         )
         if act is None or act == _BACK:
             return
-        if act.startswith("log in"):
+        if act == "relogin":
             try:
                 from . import shell as shell_mod
 
-                console.print("[dim]opening isolated login… run /login, then exit (/exit).[/]")
+                console.print(f"[{STONE}]opening isolated login… run /login, then exit (/exit).[/]")
                 shell_mod.login(inst.name)
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[red]error:[/] {exc}")
-        elif act.startswith("set"):
+                console.print(f"[{RUST}]error:[/] {exc}")
+            _pause(console)
+        elif act == "set key":
             _set_api_key(console, inst)
-        elif act.startswith("switch method"):
-            val = _select("New method:", choices=["subscription", "api-key"])
-            if val and val != inst.engine_auth:
-                inst.engine_auth = val
+            _pause(console)
+        elif act == "switch":
+            new = "api-key" if is_sub else "subscription"
+            if confirm(f"Switch authentication to {new!r}?"):
+                inst.engine_auth = new
                 _save_inst(console, inst)
-                if val == "api-key":
+                if new == "api-key":
                     _set_api_key(console, instances.load(name))
                 else:
                     console.print(
-                        f"[dim]now log in:[/] [bold]agenthook login {name}[/] "
-                        "[dim](or 'log in' here).[/]"
+                        f"[{STONE}]now log in:[/] [{AMBER}]agenthook login {name}[/] "
+                        f"[{STONE}](or 'relogin' here).[/]"
                     )
-        elif act.startswith("log out"):
+                _pause(console)
+        elif act == "logout":
             if confirm(f"Log {name!r} out and wipe its isolated auth data?"):
                 wiped = engine_auth.logout(inst)
-                try:  # also drop the api-key secret, if any
+                try:
                     from .engines import get_engine
 
-                    for key in get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]:
-                        secrets.get_backend(inst).delete(inst, key)
+                    for k in get_engine(inst.engine).auth_env_names(inst) or ["ANTHROPIC_API_KEY"]:
+                        secrets.get_backend(inst).delete(inst, k)
                 except Exception:  # noqa: BLE001
                     pass
-                console.print("[green]auth wiped.[/]" if wiped else "[dim]nothing to wipe.[/]")
+                console.print(
+                    f"[{SAGE}]✓ auth wiped.[/]" if wiped else f"[{STONE}]nothing to wipe.[/]"
+                )
+                _pause(console)
+
+
+# --- Repo pool editor (design §11) ------------------------------------------
 
 
 def _edit_repos(console, name: str) -> None:
     import questionary
-    from rich.table import Table
 
     from .instances import _derive_repo_name
 
@@ -570,15 +970,30 @@ def _edit_repos(console, name: str) -> None:
     while True:
         inst = instances.load(name)
         repos = inst.resolved_repos()
-        t = Table("repo", "url", "branch_base", title=f"pool for {name}")
-        for r in repos:
-            t.add_row(r.name, r.url, r.branch_base)
-        console.print(t if repos else "[dim]empty pool.[/]")
-        act = _select("Repos:", choices=["add", "remove", _sep(), _back_choice()])
+        _clear(console, "instances", name, "repositories")
+        _section(console, f"repository pool · {len(repos)}")
+        if repos:
+            for r in repos:
+                console.print(
+                    f"  [{CYAN}]•[/] [{BONE}]{r.name:<22}[/][{STONE}]{r.branch_base}[/]"
+                )
+        else:
+            console.print(f"  [{STONE}]empty pool.[/]")
+        act = _select(
+            "Manage repositories",
+            [
+                _action("add", "grant access to a repo"),
+                _action("remove", "revoke a repo"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
         if act is None or act == _BACK:
             return
         if act == "add":
-            spec = questionary.text("repo (name=url or url):", qmark="●", style=style).ask()
+            spec = questionary.text(
+                "Repository (name=url or url):", qmark="?", style=style
+            ).ask()
             if not spec:
                 continue
             if "=" in spec:
@@ -587,15 +1002,14 @@ def _edit_repos(console, name: str) -> None:
             else:
                 entry = {"name": _derive_repo_name(spec), "url": spec.strip()}
             branch = questionary.text(
-                "base branch (empty = inherit):", qmark="●", style=style
+                "Default branch (empty = inherit):", qmark="?", style=style
             ).ask()
             if branch:
                 entry["branch_base"] = branch
             if entry["name"] in inst.repo_names():
-                console.print(f"[red]repo {entry['name']!r} already in the pool.[/]")
+                console.print(f"[{RUST}]repo {entry['name']!r} already in the pool.[/]")
                 continue
-            # migrate a legacy single repo into the pool transparently
-            if inst.repo and not inst.repos:
+            if inst.repo and not inst.repos:  # migrate legacy single repo
                 inst.repos = [{"name": _derive_repo_name(inst.repo), "url": inst.repo}]
                 inst.repo = None
             inst.repos.append(entry)
@@ -603,83 +1017,363 @@ def _edit_repos(console, name: str) -> None:
         elif act == "remove":
             if not repos:
                 continue
-            target = _select("Remove which?", choices=[r.name for r in repos] + [_sep(), _back_choice()])
+            target = _select(
+                "Remove which?", [r.name for r in repos] + [_sep(), _back_choice()]
+            )
             if not target or target == _BACK:
                 continue
             inst.repos = [
-                r for r in inst.repos
+                r
+                for r in inst.repos
                 if (r.get("name") or _derive_repo_name(r["url"])) != target
             ]
             _save_inst(console, inst)
 
 
+# --- Env vars editor (design §10) -------------------------------------------
+
+
 def _edit_env(console, name: str) -> None:
     import questionary
-    from rich.table import Table
 
     style = _style()
     while True:
         inst = instances.load(name)
         backend = secrets.get_backend(inst)
         items = backend.items(inst)
-        t = Table("env", "value", "secret", title=f"env for {name}")
-        for ev in items:
-            shown = secrets.obfuscate(ev.value) if ev.secret else ev.value
-            t.add_row(ev.name, shown, "yes" if ev.secret else "no")
-        console.print(t if items else "[dim]no variables.[/]")
-        act = _select("Environment variables:", choices=["set", "remove", _sep(), _back_choice()])
+        _clear(console, "instances", name, "env vars")
+        _section(console, f"environment · {len(items)} variable(s)")
+        if items:
+            for ev in items:
+                if ev.secret:
+                    console.print(
+                        f"  [{BONE}]{ev.name:<16}[/][dim]••••••••••••[/][{CLAY}]   secret[/]"
+                    )
+                else:
+                    console.print(f"  [{BONE}]{ev.name:<16}[/][{CYAN}]{ev.value}[/]")
+        else:
+            console.print(f"  [{STONE}]no variables.[/]")
+        act = _select(
+            "Manage variables",
+            [
+                _action("set", "add or update a variable"),
+                _action("remove", "delete a variable"),
+                _sep(),
+                _back_choice(),
+            ],
+        )
         if act is None or act == _BACK:
             return
         if act == "set":
-            key = questionary.text("Name (KEY):", qmark="●", style=style).ask()
+            key = questionary.text("Name (KEY):", qmark="?", style=style).ask()
             if not key:
                 continue
-            value = questionary.text("Value:", qmark="●", style=style).ask() or ""
+            value = questionary.text("Value:", qmark="?", style=style).ask() or ""
             is_secret = bool(
                 questionary.confirm(
-                    "Is it a secret (obfuscate)?", default=True, qmark="●", style=style
+                    "Secret? (encrypt & obfuscate)", default=True, qmark="?", style=style
                 ).ask()
             )
             backend.set(inst, key, value, is_secret)
-            console.print(f"[green]set[/] {key}{' (secret)' if is_secret else ''}")
+            console.print(f"[{SAGE}]✓ set[/] {key}{' (secret)' if is_secret else ''}")
         elif act == "remove":
             if not items:
                 continue
-            target = _select("Remove which?", choices=[ev.name for ev in items] + [_sep(), _back_choice()])
+            target = _select(
+                "Remove which?", [ev.name for ev in items] + [_sep(), _back_choice()]
+            )
             if not target or target == _BACK:
                 continue
             backend.delete(inst, target)
-            console.print(f"[green]removed[/] {target}")
+            console.print(f"[{SAGE}]✓ removed[/] {target}")
 
 
-# --- Listings ----------------------------------------------------------------
+# --- Instance listing -------------------------------------------------------
 
 
 def _show_instances(console) -> None:
     from rich.table import Table
 
-    t = Table("name", "engine", "deliverable", "repos", "paused")
+    t = Table("name", "engine", "deliverable", "repos", "status", box=None, pad_edge=False)
     for inst in instances.list_all():
         names = inst.repo_names()
-        t.add_row(inst.name, inst.engine, inst.deliverable,
-                  ", ".join(names) if names else "-",
-                  "[red]yes[/]" if inst.paused else "no")
+        t.add_row(
+            f"[{AMBER}]{inst.name}[/]",
+            inst.engine,
+            inst.deliverable,
+            ", ".join(names) if names else "-",
+            _inst_badge(inst),
+        )
+    console.print()
     console.print(t)
 
 
-def _show_jobs(console) -> None:
-    from rich.table import Table
-
-    t = Table("job", "instance", "status", "deliverable")
-    for j in store.list_jobs(limit=20):
-        t.add_row(j.id, j.instance, j.status.value, j.deliverable.value)
-    console.print(t)
+# --- Jobs (design §12 / §13) ------------------------------------------------
 
 
-def _show_sessions(console) -> None:
-    from rich.table import Table
+def _jobs_menu(console) -> None:
+    while True:
+        _clear(console, "jobs")
+        jobs = store.list_jobs(limit=20)
+        console.print()
+        console.print(
+            f"  [{AMBER} bold]jobs[/]   "
+            f"[{STONE}]{len(jobs)} recent · ↵ to open a job[/]"
+        )
+        console.print(
+            f"  [{STONE}]{'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<12}AGE[/]"
+        )
+        if not jobs:
+            console.print(f"\n  [{STONE}]no jobs yet.[/]")
+        choice = _select(
+            "jobs",
+            [_job_choice(j) for j in jobs]
+            + [_sep(), _action("refresh", "reload the list"), _back_choice()],
+        )
+        if choice is None or choice == _BACK:
+            return
+        if choice == "refresh":
+            continue
+        _job_view(console, choice)
 
-    t = Table("session", "instance", "thread_key", "jobs")
-    for s in store.list_sessions():
-        t.add_row(s.id, s.instance, s.thread_key, str(s.job_count))
-    console.print(t)
+
+def _job_view(console, job_id: str) -> None:
+    job = store.get_job(job_id)
+    if not job:
+        console.print(f"[{RUST}]job not found.[/]")
+        _pause(console)
+        return
+    _clear(console, "jobs", job.id)
+    status = job.status.value
+    repos = job.request.get("repos")
+    repo_s = ", ".join(repos) if repos else "—"
+    console.print()
+    console.print(
+        f"  [{AMBER} bold]{job.id}[/]   [{BONE}]{job.instance}[/]"
+        f"[{STONE}]   ·  {job.deliverable.value}   ·  {repo_s}[/]"
+    )
+    console.print()
+    console.print("  " + _step_rail(status))
+    console.print()
+
+    cost = f"${job.usage.cost_usd:.4f}" if job.usage.cost_usd else "—"
+    toks = (job.usage.input_tokens or 0) + (job.usage.output_tokens or 0)
+    tok_s = f"{toks / 1000:.1f}k tok" if toks else "—"
+    console.print(
+        f"  {_job_badge(status)}[{STONE}]   elapsed {_elapsed(job)}   ·  {cost}   ·  {tok_s}[/]"
+    )
+    if job.error_class:
+        console.print(f"  [{RUST}]{job.error_class}[/] [dim]{job.error_message or ''}[/]")
+    if job.pr_url:
+        console.print(f"  [{CYAN}]PR:[/] {job.pr_url}")
+
+    _section(console, "agent log")
+    for line in _log_tail(job):
+        console.print(f"  [{CYAN}]◆[/] [dim]{line}[/]")
+
+    if status == "awaiting_approval":
+        _approve_flow(console, job)
+        return
+
+    actions = [_action("logs", "show the full job log", value="logs")]
+    if not job.status.terminal:
+        actions.append(_action("cancel", "stop this job", value="cancel"))
+    actions += [_sep(), _back_choice()]
+    act = _select("job", actions)
+    if act == "logs":
+        _show_logs(console, job)
+        _pause(console)
+    elif act == "cancel":
+        if confirm(f"Cancel job {job.id}?"):
+            job.status = job.status.__class__.INTERRUPTED
+            store.save_job(job)
+            console.print(f"[{CLAY}]cancel requested.[/]")
+            _pause(console)
+
+
+def _step_rail(status: str) -> str:
+    """A heuristic clone→plan→edit→checks→deliver rail keyed off status."""
+    names = ["clone", "plan", "edit", "checks", "deliver"]
+    done_all = status in ("success",)
+    if done_all:
+        marks = [("✓", SAGE)] * 5
+    elif status == "awaiting_approval":
+        marks = [("✓", SAGE), ("✓", SAGE), ("◷", LILAC), ("·", STONE), ("·", STONE)]
+    elif status == "failed-checks":
+        marks = [("✓", SAGE), ("✓", SAGE), ("✓", SAGE), ("✗", RUST), ("·", STONE)]
+    elif status in ("error", "timeout", "blocked", "interrupted"):
+        marks = [("✓", SAGE), ("✗", RUST), ("·", STONE), ("·", STONE), ("·", STONE)]
+    elif status == "running":
+        marks = [("✓", SAGE), ("✓", SAGE), ("▸", AMBER), ("·", STONE), ("·", STONE)]
+    else:  # queued / rejected / expired
+        marks = [("·", STONE)] * 5
+    parts = []
+    for (glyph, color), nm in zip(marks, names):
+        parts.append(f"[{color}]{glyph} {nm}[/]")
+    return f"[{STONE}] ── [/]".join(parts)
+
+
+def _log_tail(job, n: int = 6) -> list[str]:
+    from . import paths
+
+    path = paths.job_log(job.instance, job.id)
+    if path.exists():
+        lines = [ln.rstrip() for ln in path.read_text().splitlines() if ln.strip()]
+        if lines:
+            return lines[-n:]
+    if job.result and job.result.text:
+        return [ln for ln in job.result.text.strip().splitlines()[:n]]
+    return ["(no log yet)"]
+
+
+def _show_logs(console, job) -> None:
+    from . import paths
+
+    path = paths.job_log(job.instance, job.id)
+    console.print()
+    if path.exists():
+        console.print(path.read_text())
+    elif job.result and job.result.text:
+        console.print(job.result.text)
+    else:
+        console.print(f"[{STONE}](no logs yet)[/]")
+
+
+def _approve_flow(console, job) -> None:
+    from rich.panel import Panel
+
+    plan_text = ""
+    if job.result and job.result.text:
+        plan_text = job.result.text
+    plan_text = plan_text or job.metadata.get("plan", "(no plan text captured)")
+    console.print()
+    console.print(
+        f"  [{LILAC}]◷ awaiting_approval[/][{STONE}]   the agent paused for review[/]"
+    )
+    console.print(
+        Panel(
+            plan_text.strip()[:1200],
+            title=f"Plan · {job.id}",
+            border_style=LILAC,
+            padding=(1, 2),
+            expand=False,
+        )
+    )
+    act = _select(
+        "Approve this plan?",
+        [
+            _action("approve", "run the plan as proposed"),
+            _action("edit", "send a note back & replan"),
+            _action("reject", "stop the job here"),
+            _sep(),
+            _back_choice(),
+        ],
+    )
+    from .models import JobStatus
+
+    if act == "approve":
+        job.status = JobStatus.QUEUED
+        store.save_job(job)
+        console.print(f"[{SAGE}]✓ approved — re-queued for apply (the server picks it up).[/]")
+        _pause(console)
+    elif act == "edit":
+        import questionary
+
+        note = questionary.text("Note to the agent:", qmark="?", style=_style()).ask()
+        if note:
+            job.metadata["review_note"] = note
+            job.status = JobStatus.QUEUED
+            store.save_job(job)
+            console.print(f"[{SAGE}]✓ sent — re-queued to replan.[/]")
+            _pause(console)
+    elif act == "reject":
+        if confirm("Reject this plan and stop the job?"):
+            job.status = JobStatus.REJECTED
+            store.save_job(job)
+            console.print(f"[{CLAY}]rejected.[/]")
+            _pause(console)
+
+
+# --- Sessions (design §14) --------------------------------------------------
+
+
+def _sessions_menu(console) -> None:
+    while True:
+        _clear(console, "sessions")
+        sessions = store.list_sessions()
+        console.print()
+        console.print(
+            f"  [{AMBER} bold]sessions[/][{STONE}]   durable threads shared across jobs[/]"
+        )
+        console.print(
+            f"  [{STONE}]{'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST[/]"
+        )
+        if not sessions:
+            console.print(f"\n  [{STONE}]no sessions yet.[/]")
+        import questionary
+
+        choices = []
+        for s in sessions:
+            choices.append(
+                questionary.Choice(
+                    title=[
+                        (f"fg:{LILAC}", f"{s.thread_key:<18}"),
+                        ("", f"{s.instance:<14}"),
+                        (_MUTED, f"{s.job_count:<6}{_ago(s.updated_at)}"),
+                    ],
+                    value=s.id,
+                )
+            )
+        choice = _select("sessions", choices + [_sep(), _back_choice()])
+        if choice is None or choice == _BACK:
+            return
+        _session_view(console, choice)
+
+
+def _session_view(console, session_id: str) -> None:
+    sess = store.get_session(session_id)
+    if not sess:
+        console.print(f"[{RUST}]session not found.[/]")
+        _pause(console)
+        return
+    _clear(console, "sessions", sess.thread_key)
+    jobs = [j for j in store.list_jobs(instance=sess.instance, limit=200)
+            if j.thread_key == sess.thread_key]
+    console.print()
+    console.print(
+        f"  [{LILAC} bold]{sess.thread_key}[/]   [{BONE}]{sess.instance}[/]"
+        f"[{STONE}]   ·  {len(jobs)} jobs   ·  opened {_ago(sess.created_at)}[/]"
+    )
+    first_prompt = jobs[-1].prompt if jobs else ""
+    if first_prompt:
+        _section(console, "thread context")
+        console.print(f'  [dim]“{first_prompt.strip()[:120]}”[/]')
+
+    _section(console, "jobs in this thread")
+    if jobs:
+        for j in jobs:
+            console.print(
+                f"  [{STONE}]{j.id:<14}[/]{_job_badge(j.status.value):<24} "
+                f"[{STONE}]{j.deliverable.value:<10}{_ago(j.created_at)}[/]"
+            )
+    else:
+        console.print(f"  [{STONE}]no jobs yet.[/]")
+
+    act = _select(
+        "session",
+        [
+            _action("open job", "inspect a job in this thread", value="open job"),
+            _action("resume", "resume this thread in chat", value="resume"),
+            _sep(),
+            _back_choice(),
+        ],
+    )
+    if act == "open job" and jobs:
+        choice = _select("Open which job?", [_job_choice(j) for j in jobs] + [_sep(), _back_choice()])
+        if choice and choice != _BACK:
+            _job_view(console, choice)
+    elif act == "resume":
+        _clear(console, "chat", sess.instance, f"#{sess.thread_key}")
+        from . import chat
+
+        chat.repl(sess.instance, thread_key=sess.thread_key, console=console)

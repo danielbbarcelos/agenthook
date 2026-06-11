@@ -71,9 +71,12 @@ def _cleanup(ctx: RunContext) -> None:
 
 def _frame(inst, engine, cfg, kind: str) -> None:
     label = "shell" if kind == "shell" else "login"
-    print(f"\n┌─ container: {inst.name} (isolated) · {engine.name}/{inst.engine_auth} · {label} ─┐")
-    print(f"│ image {cfg.docker_image} · the host's ~/.claude is NOT used")
-    print("└" + "─" * 48)
+    print(f"\n◇ ephemeral container · {inst.name} · {engine.name}/{inst.engine_auth} · {label}")
+    print(f"  image {cfg.docker_image} · the host's ~/.claude is NOT used")
+    if kind == "shell":
+        print("  type /exit (or exit) to leave · changes don't persist unless committed\n")
+    else:
+        print("  run /login, then /exit when done\n")
 
 
 def _docker_session(inst, cfg, *, kind: str, exec_replace: bool = False) -> int | None:

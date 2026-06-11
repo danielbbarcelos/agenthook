@@ -68,15 +68,16 @@ def repl(
         shown_repos = ", ".join(sel)
 
     console.print(
-        f"[bold #b48ead]●[/] session [cyan]{name}[/] "
-        f"[dim](thread: {tk} · engine: {inst.engine}/{inst.engine_auth} · "
-        f"deliverable: {deliv} · repos: {shown_repos})[/]"
+        f"[#a3be8c]◇ container ready[/]  [dim]· {name} · {inst.engine}/{inst.engine_auth}"
+        f" · {deliv} · repos: {shown_repos}[/]"
     )
-    console.print("[dim]/help for commands · /exit or Ctrl+D to leave[/]\n")
+    console.print(
+        f"[dim]thread: {tk} · /help for commands · /exit or Ctrl+D to leave[/]\n"
+    )
 
     while True:
         try:
-            line = console.input("[bold #b48ead]you ›[/] ").strip()
+            line = console.input("[#6f6a5d]you ›[/] ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -114,11 +115,12 @@ def repl(
         with console.status("[dim]thinking…[/]", spinner="dots"):
             job = runner.run_job(job, log_cb=lambda _m: None)
 
+        label = inst.engine
         if job.result and job.result.text:
-            console.print(f"[bold #88c0d0]claude ›[/] {job.result.text}\n")
+            console.print(f"[bold #88c0d0]◆ {label} ›[/] {job.result.text}\n")
         else:
             detail = job.error_message or job.status.value
-            console.print(f"[yellow]claude ›[/] [dim]({job.status.value})[/] {detail}\n")
+            console.print(f"[#d08770]◆ {label} ›[/] [dim]({job.status.value})[/] {detail}\n")
 
     console.print("[dim]bye.[/]")
 

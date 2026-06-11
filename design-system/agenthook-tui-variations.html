@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agenthook · TUI variations</title>
+<link rel="stylesheet" href="terminal.css">
+<style>
+  /* terminal frame inside an artboard fills it edge-to-edge */
+  .vt { width:100%; height:100%; display:flex; flex-direction:column;
+        background:var(--bg-frame); border-radius:9px; overflow:hidden;
+        font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace; }
+  .vt .term-bar { border-radius:0; }
+  .vt .screen { flex:1; margin:0; overflow:hidden; padding:16px 18px; }
+  .dirtag { font-size:10.5px; letter-spacing:0.16em; text-transform:uppercase;
+            color:var(--muted); }
+</style>
+</head>
+<body>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="variation-screens.js"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+function Term({ id, cmd, tag }) {
+  return (
+    <div className="vt">
+      <div className="term-bar">
+        <span className="dot r"></span><span className="dot y"></span><span className="dot g"></span>
+        <span className="term-cmd"><span className="p">$</span> {cmd}</span>
+        {tag ? <span className="term-tag">{tag}</span> : null}
+      </div>
+      <pre className="screen cozy" dangerouslySetInnerHTML={{ __html: window.VS[id] }}></pre>
+    </div>
+  );
+}
+
+const W = { guided: 520, cockpit: 668, minimal: 452 };
+
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection id="home" title="Home" subtitle="Three takes on the entry screen — Guided · Cockpit · Minimal">
+        <DCArtboard id="home-guided"  label="A · Guided — menu & status" width={W.guided}  height={392} style={{background:'#100f0b'}}>
+          <Term id="home1" cmd="agenthook" tag="vertical menu" />
+        </DCArtboard>
+        <DCArtboard id="home-cockpit" label="B · Cockpit — live dashboard" width={W.cockpit} height={392} style={{background:'#100f0b'}}>
+          <Term id="home2" cmd="agenthook" tag="Textual · live" />
+        </DCArtboard>
+        <DCArtboard id="home-minimal" label="C · Minimal — command palette" width={W.minimal} height={392} style={{background:'#100f0b'}}>
+          <Term id="home3" cmd="agenthook" tag="type to run" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="view" title="View instance" subtitle="Same data, three densities">
+        <DCArtboard id="view-guided"  label="A · Guided — single column" width={W.guided}  height={548} style={{background:'#100f0b'}}>
+          <Term id="view1" cmd="agenthook instances view api-bot" tag="read-only" />
+        </DCArtboard>
+        <DCArtboard id="view-cockpit" label="B · Cockpit — two-pane" width={W.cockpit} height={548} style={{background:'#100f0b'}}>
+          <Term id="view2" cmd="agenthook instances view api-bot" tag="dense" />
+        </DCArtboard>
+        <DCArtboard id="view-minimal" label="C · Minimal — key/values" width={W.minimal} height={548} style={{background:'#100f0b'}}>
+          <Term id="view3" cmd="agenthook instances view api-bot" tag="airy" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="job" title="Job — running" subtitle="Live feedback at three intensities">
+        <DCArtboard id="job-guided"  label="A · Guided — rail + log" width={W.guided}  height={432} style={{background:'#100f0b'}}>
+          <Term id="job1" cmd="agenthook jobs view 9c20" tag="stepped" />
+        </DCArtboard>
+        <DCArtboard id="job-cockpit" label="B · Cockpit — split panes" width={W.cockpit} height={432} style={{background:'#100f0b'}}>
+          <Term id="job2" cmd="agenthook jobs view 9c20" tag="Textual · live" />
+        </DCArtboard>
+        <DCArtboard id="job-minimal" label="C · Minimal — one-glance" width={W.minimal} height={432} style={{background:'#100f0b'}}>
+          <Term id="job3" cmd="agenthook jobs view 9c20" tag="quiet" />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

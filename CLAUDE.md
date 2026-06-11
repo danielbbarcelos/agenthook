@@ -1,0 +1,22 @@
+# agenthook — instruções do projeto
+
+## Workflow de desenvolvimento
+
+**Sempre que fizermos alterações no código aqui, reinstale o agenthook em seguida:**
+
+```bash
+pipx install --editable . --force
+```
+
+A instalação é editável (mudanças em `.py` valem na hora), mas o reinstall garante
+que entry points, dependências e o binário em `~/.local/bin/agenthook` fiquem
+consistentes. Rode após cada rodada de alterações, sem precisar pedir.
+
+> Atenção ao caminho: o `.pth` do pipx deve apontar para o diretório real deste
+> repositório. Confirme que aponta para cá após reinstalar.
+
+## Design
+
+A interface (TUI) segue a direção **Guided** documentada em `design-system/`
+(ver `design-system/README.md` — paleta, padrões, mapa de navegação e as telas).
+A spec de produto vive em `DESIGN.md`.
