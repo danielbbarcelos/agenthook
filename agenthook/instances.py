@@ -190,12 +190,26 @@ def list_all() -> list[Instance]:
 
 
 def delete(name: str) -> None:
+    """Remove an instance and *all* its on-disk state.
+
+    Critically this includes the isolated engine auth dir (the per-instance
+    subscription login / api-key config): a fresh instance reusing the name must
+    start unauthenticated, never inherit the old subscription. Repo mirrors and
+    logs go too, so nothing leaks across a delete + re-create.
+    """
     import shutil
 
     d = paths.instance_dir(name)
     if not d.exists():
         raise InstanceError(f"instance {name!r} not found")
     shutil.rmtree(d)
+    for extra in (
+        paths.home() / "auth" / name,
+        paths.repos_dir() / name,
+        paths.home() / "logs" / name,
+    ):
+        if extra.exists():
+            shutil.rmtree(extra, ignore_errors=True)
 
 
 def set_paused(name: str, paused: bool, reason: str | None = None) -> None:

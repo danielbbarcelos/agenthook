@@ -150,9 +150,13 @@ def _crumb(console, *parts: str, right: str | None = None) -> None:
 
 
 def _clear(console, *parts: str, right: str | None = None) -> None:
-    """A 'big' transition: clear, then anchor with the breadcrumb."""
+    """Every screen change clears the terminal (no infinite scroll), redraws the
+    hero banner at the top, then anchors with the breadcrumb."""
     console.clear()
-    _crumb(console, *parts, right=right)
+    _banner(console)
+    if parts:
+        console.print()
+        _crumb(console, *parts, right=right)
 
 
 # --- Time helpers -----------------------------------------------------------
@@ -342,10 +346,9 @@ def main_menu() -> None:
         console.print("agenthook — run `agenthook --help` for commands.")
         return
 
-    console.clear()  # the only unconditional clear: on entry
-    _banner(console)
     interrupts = 0
     while True:
+        _clear(console)  # clear + hero banner on every screen change
         choice = _select(
             "Where to?",
             choices=[
@@ -357,11 +360,10 @@ def main_menu() -> None:
                 _back_choice(_QUIT),
             ],
         )
-        if choice is None:  # Ctrl+C on the top menu
+        if choice is None:  # Ctrl+C on the top menu (footer says "Ctrl+C 2×")
             interrupts += 1
             if interrupts >= 2:
                 break
-            console.print(f"[{STONE}]Ctrl+C again to quit, or pick an option.[/]")
             continue
         interrupts = 0
         if choice == _QUIT:
@@ -374,15 +376,8 @@ def main_menu() -> None:
             _sessions_menu(console)
         elif choice == "serve":
             _serve(console)
-        # back from a submenu: redraw the banner so the home screen feels fresh
-        _clear_home(console)
 
     console.print(f"[{STONE}]bye.[/]")
-
-
-def _clear_home(console) -> None:
-    console.clear()
-    _banner(console)
 
 
 # --- serve ------------------------------------------------------------------
@@ -1091,17 +1086,20 @@ def _edit_env(console, name: str) -> None:
         backend = secrets.get_backend(inst)
         items = backend.items(inst)
         _clear(console, "instances", name, "env vars")
-        _section(console, f"environment · {len(items)} variable(s)")
-        if items:
-            for ev in items:
-                if ev.secret:
-                    console.print(
-                        f"  [{BONE}]{ev.name:<16}[/][dim]••••••••••••[/][{CLAY}]   secret[/]"
-                    )
-                else:
-                    console.print(f"  [{BONE}]{ev.name:<16}[/][{CYAN}]{ev.value}[/]")
-        else:
-            console.print(f"  [{STONE}]no variables.[/]")
+        rows = []
+        for ev in items:
+            if ev.secret:
+                rows.append((ev.name, "[dim]••••••••••••[/]", f"[{CLAY}]secret[/]"))
+            else:
+                rows.append((ev.name, f"[{CYAN}]{ev.value}[/]", f"[{STONE}]no[/]"))
+        console.print()
+        console.print(
+            _table(
+                ["env", "value", "secret"],
+                rows,
+                "no variables yet — choose “set” to add one",
+            )
+        )
         act = _select(
             "Manage variables",
             [
