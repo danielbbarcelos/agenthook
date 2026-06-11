@@ -34,13 +34,17 @@ STONE = "#6f6a5d"  # muted
 BONE = "#e8e3d8"  # foreground
 BORDER = "#45413a"  # subtle box border — darker than muted, just a hairline
 
-_LOGO = (
-    " █████╗  ██████╗ ███████╗███╗   ██╗████████╗██╗  ██╗ ██████╗  ██████╗ ██╗  ██╗\n"
-    "██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██║  ██║██╔═══██╗██╔═══██╗██║ ██╔╝\n"
-    "███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ███████║██║   ██║██║   ██║█████╔╝ \n"
-    "██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ██╔══██║██║   ██║██║   ██║██╔═██╗ \n"
-    "██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ██║  ██║╚██████╔╝╚██████╔╝██║  ██╗\n"
-    "╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝"
+# Node mark (the webhook → agent chain), padded to vertically center against the
+# wordmark when shown side by side.
+_MARK = "\n●─╮\n  ╰─●─╮\n      ╰─●\n"
+
+# "agenthook" in a compact ascii wordmark (FIGlet 'small').
+_WORDMARK = (
+    "                   _   _             _\n"
+    " __ _ __ _ ___ _ _| |_| |_  ___  ___| |__\n"
+    "/ _` / _` / -_) ' \\  _| ' \\/ _ \\/ _ \\ / /\n"
+    "\\__,_\\__, \\___|_||_\\__|_||_\\___/\\___/_\\_\\\n"
+    "     |___/"
 )
 
 _MUTED = f"fg:{STONE}"
@@ -520,8 +524,15 @@ def _banner(console) -> None:
     from rich import box
     from rich.console import Group
     from rich.panel import Panel
+    from rich.table import Table
 
-    art = Text(_LOGO, style=f"bold {AMBER}", no_wrap=True, overflow="crop")
+    head = Table.grid(padding=(0, 2))
+    head.add_column()
+    head.add_column()
+    head.add_row(
+        Text(_MARK, style=f"bold {AMBER}"),
+        Text(_WORDMARK, style=f"bold {AMBER}", no_wrap=True, overflow="crop"),
+    )
     subtitle = Text.from_markup(
         f"[{STONE}]v{_version()} · self-hosted agent task runner[/]"
     )
@@ -539,7 +550,7 @@ def _banner(console) -> None:
     console.print()
     console.print(
         Panel(
-            Group(art, Text(""), subtitle, Text(""), status, hints),
+            Group(head, subtitle, Text(""), status, hints),
             box=box.ROUNDED,
             border_style=BORDER,
             padding=(0, 2),
