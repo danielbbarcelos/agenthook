@@ -34,6 +34,15 @@ STONE = "#6f6a5d"  # muted
 BONE = "#e8e3d8"  # foreground
 BORDER = "#45413a"  # subtle box border — darker than muted, just a hairline
 
+_LOGO = (
+    " █████╗  ██████╗ ███████╗███╗   ██╗████████╗██╗  ██╗ ██████╗  ██████╗ ██╗  ██╗\n"
+    "██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██║  ██║██╔═══██╗██╔═══██╗██║ ██╔╝\n"
+    "███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ███████║██║   ██║██║   ██║█████╔╝ \n"
+    "██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ██╔══██║██║   ██║██║   ██║██╔═██╗ \n"
+    "██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ██║  ██║╚██████╔╝╚██████╔╝██║  ██╗\n"
+    "╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝"
+)
+
 _MUTED = f"fg:{STONE}"
 
 # Plain-text sentinels — values returned by menu choices.
@@ -490,8 +499,8 @@ def _server_up(host: str, port: int) -> bool:
 
 
 def _banner(console) -> None:
-    """Drawn once on entry. The node mark reads as a webhook → agent chain; the
-    status line answers 'is anything running, is the server up' before any key."""
+    """Drawn once on entry: the AGENTHOOK wordmark, version + tagline, and a
+    status line that answers 'is anything running, is the server up' at a glance."""
     from rich.text import Text
 
     try:
@@ -508,23 +517,14 @@ def _banner(console) -> None:
     except Exception:  # noqa: BLE001
         up, port = False, 8080
 
-    logo = ["●─╮", "  ╰─●─╮", "      ╰─●"]
-    meta = [
-        ("", ""),
-        (f"agenthook  [{STONE}]v{_version()}", "bold white"),
-        (f"[{STONE}]self-hosted agent task runner", "dim"),
-    ]
     from rich import box
     from rich.console import Group
     from rich.panel import Panel
 
-    art = Text()
-    for i in range(3):
-        art.append(f"{logo[i]:<10}", style=f"bold {AMBER}")
-        art.append("  ")
-        art.append(Text.from_markup(meta[i][0]))
-        if i < 2:
-            art.append("\n")
+    art = Text(_LOGO, style=f"bold {AMBER}", no_wrap=True, overflow="crop")
+    subtitle = Text.from_markup(
+        f"[{STONE}]v{_version()} · self-hosted agent task runner[/]"
+    )
 
     srv = f"[{SAGE}]● up[/] [{STONE}]:{port}[/]" if up else f"[{STONE}]○ down[/]"
     status = Text.from_markup(
@@ -539,7 +539,7 @@ def _banner(console) -> None:
     console.print()
     console.print(
         Panel(
-            Group(art, Text(""), status, hints),
+            Group(art, Text(""), subtitle, Text(""), status, hints),
             box=box.ROUNDED,
             border_style=BORDER,
             padding=(0, 2),
