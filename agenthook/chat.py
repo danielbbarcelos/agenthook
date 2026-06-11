@@ -25,6 +25,30 @@ _HELP = """[dim]commands:
   /exit  /quit       leave[/]"""
 
 
+def _session_history(name: str, tk: str, limit: int = 200) -> list[str]:
+    """Past user prompts for this thread, oldest → newest, deduped — so ↑ in the
+    chat input recalls what was already asked in the session."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for job in reversed(store.list_jobs(instance=name, limit=limit)):
+        if job.thread_key == tk and job.prompt and job.prompt not in seen:
+            seen.add(job.prompt)
+            out.append(job.prompt)
+    return out
+
+
+def _prompt_session(name: str, tk: str):
+    """An input prompt with ↑/↓ history, seeded from the thread's past prompts.
+    New lines are appended automatically as they're accepted."""
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+
+    hist = InMemoryHistory()
+    for prompt in _session_history(name, tk):
+        hist.append_string(prompt)
+    return PromptSession(history=hist)
+
+
 def _flush_input() -> None:
     """Discard anything typed while a turn was running, so stray keystrokes /
     Enters don't auto-submit once the prompt comes back."""
@@ -82,12 +106,14 @@ def repl(
         f" · {deliv} · repos: {shown_repos}[/]"
     )
     console.print(
-        f"[dim]thread: {tk} · /help for commands · /exit or Ctrl+D to leave[/]\n"
+        f"[dim]thread: {tk} · /help for commands · /exit or Ctrl+D to leave · ↑ history[/]\n"
     )
+
+    psession = _prompt_session(name, tk)
 
     while True:
         try:
-            line = console.input("[#6f6a5d]you ›[/] ").strip()
+            line = psession.prompt([("fg:#6f6a5d", "you › ")]).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
