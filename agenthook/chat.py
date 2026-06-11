@@ -173,14 +173,21 @@ def repl(
 
         job = _build_job(inst, line, deliv, tk, sel)
         store.create_job(job)
-        done = _run_turn(console, job)
+        label = inst.engine
+        result = _run_turn(console, job, label)
         _flush_input()  # drop input typed while it was thinking (no auto-resubmit)
-        if done is None:  # cancelled or errored — already reported
+        if result is None:  # cancelled or errored — already reported
             continue
+        done, streamed = result
         turns += 1
 
-        label = inst.engine
-        if done.result and done.result.text:
+        if streamed:
+            console.print("\n")  # close the streamed line + spacing
+            if not (done.result and done.result.text):
+                console.print(
+                    f"[#d08770][dim]({done.status.value})[/] {done.error_message or ''}[/]\n"
+                )
+        elif done.result and done.result.text:
             console.print(f"[bold #88c0d0]◆ {label} ›[/] {done.result.text}\n")
         else:
             detail = done.error_message or done.status.value
@@ -205,36 +212,56 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{s // 3600}h {(s % 3600) // 60:02d}m {s % 60:02d}s"
 
 
-def _run_turn(console, job):
-    """Run one chat turn off-thread so we can show a live elapsed timer and
-    actually cancel (kill the container) on Ctrl+C. Returns the finished Job, or
-    None if cancelled/errored (already reported to the console)."""
+def _run_turn(console, job, label: str):
+    """Run one chat turn off-thread, streaming the engine's output live (token by
+    token). A spinner with an elapsed timer shows during the silent prep/think
+    phase; once text starts it streams in place. Ctrl+C cancels (kills the
+    container). Returns (Job, streamed: bool), or None if cancelled/errored."""
+    import queue
     import subprocess
     import threading
-    import time
 
     from . import runner
     from .config import load_config
 
+    q: queue.Queue = queue.Queue()
     box: dict = {"job": None, "exc": None}
 
     def work():
         try:
-            box["job"] = runner.run_job(job, log_cb=lambda _m: None)
+            box["job"] = runner.run_job(job, on_text=q.put)
         except BaseException as exc:  # noqa: BLE001 — surface anything to the REPL
             box["exc"] = exc
 
     t = threading.Thread(target=work, daemon=True)
     t.start()
     start = time.monotonic()
+    streamed = False
     try:
+        # Phase 1 — spinner + elapsed until the first text delta (or the turn ends).
+        first = None
         with console.status("[dim]thinking…[/]", spinner="dots") as st:
-            while t.is_alive():
-                st.update(
-                    f"[dim]thinking… {_fmt_elapsed(time.monotonic() - start)} "
-                    f"(Ctrl+C to cancel)[/]"
-                )
-                t.join(timeout=0.5)
+            while True:
+                try:
+                    first = q.get(timeout=0.2)
+                    break
+                except queue.Empty:
+                    if not t.is_alive():
+                        break
+                    st.update(
+                        f"[dim]thinking… {_fmt_elapsed(time.monotonic() - start)} "
+                        f"(Ctrl+C to cancel)[/]"
+                    )
+        # Phase 2 — stream deltas in place (spinner already torn down).
+        if first is not None:
+            streamed = True
+            console.print(f"[bold #88c0d0]◆ {label} ›[/] ", end="")
+            console.print(first, end="", markup=False, highlight=False)
+            while t.is_alive() or not q.empty():
+                try:
+                    console.print(q.get(timeout=0.2), end="", markup=False, highlight=False)
+                except queue.Empty:
+                    pass
     except KeyboardInterrupt:
         try:
             if load_config().use_docker:
@@ -246,12 +273,13 @@ def _run_turn(console, job):
         except Exception:  # noqa: BLE001
             pass
         t.join(timeout=5)
-        console.print("[#d08770]· cancelled.[/] [dim]send another message.[/]\n")
+        console.print("\n[#d08770]· cancelled.[/] [dim]send another message.[/]\n")
         return None
+    t.join()
     if box["exc"] is not None:
-        console.print(f"[#bf616a]· engine error:[/] {box['exc']}\n")
+        console.print(f"\n[#bf616a]· engine error:[/] {box['exc']}\n")
         return None
-    return box["job"]
+    return box["job"], streamed
 
 
 def _build_job(inst, prompt: str, deliverable: str, thread_key: str, repos) -> Job:

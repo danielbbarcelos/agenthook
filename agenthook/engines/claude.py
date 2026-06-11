@@ -26,6 +26,9 @@ class ClaudeEngine(Engine):
 
     def build_argv(self, spec: RunSpec) -> list[str]:
         argv = [self.binary, "-p", spec.prompt, "--output-format", "stream-json", "--verbose"]
+        if spec.stream:
+            # emit content_block_delta events so output can be shown token-by-token
+            argv += ["--include-partial-messages"]
 
         # Mode -> permission flags. Every run here is headless (`-p`), so the
         # permission mode must be non-interactive: an unanswered tool-permission
@@ -70,6 +73,22 @@ class ClaudeEngine(Engine):
         from pathlib import Path
 
         return [Path(auth_dir) / ".credentials.json"]
+
+    def stream_text(self, line: str) -> str | None:
+        line = line.strip()
+        if not line or '"text_delta"' not in line and '"text"' not in line:
+            return None
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        # --include-partial-messages wraps Anthropic stream events.
+        ev = evt.get("event") if evt.get("type") == "stream_event" else evt
+        if isinstance(ev, dict) and ev.get("type") == "content_block_delta":
+            delta = ev.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                return delta.get("text") or None
+        return None
 
     def parse_output(self, stdout, stderr, exit_code):
         result = Result(raw=stdout)

@@ -477,6 +477,42 @@ def _pick_instance_or_none(console, prompt: str = "Which instance?"):
     return _select(prompt, choices + [_sep(), _back_choice()])
 
 
+def _pick_chat_thread(console, name: str):
+    """Offer a fresh chat or resuming a previous one for this instance. Returns
+    a thread_key to resume, None for a new chat, or _BACK to cancel. Sessions are
+    persisted (SQLite), so past chats survive exit/restart."""
+    import questionary
+
+    sessions = store.list_sessions(instance=name)
+    if not sessions:
+        return None  # nothing to resume → straight to a fresh chat
+
+    last_prompt: dict[str, str] = {}
+    for j in store.list_jobs(instance=name, limit=300):  # newest first
+        if j.thread_key and j.thread_key not in last_prompt and j.prompt:
+            last_prompt[j.thread_key] = j.prompt
+
+    choices = [_action("new chat", "start a fresh conversation", value="__new__")]
+    for s in sessions[:12]:
+        prev = (last_prompt.get(s.thread_key, "") or "").replace("\n", " ")[:38]
+        choices.append(
+            questionary.Choice(
+                title=[
+                    (f"fg:{LILAC}", f"{s.thread_key:<20}"),
+                    (_MUTED, f"{s.job_count} msg · {_ago(s.updated_at)}   {prev}"),
+                ],
+                value=s.thread_key,
+            )
+        )
+    _clear(console, "chat", name)
+    sel = _select(
+        "New chat or resume a previous one?", choices + [_sep(), _back_choice()]
+    )
+    if sel is None or sel == _BACK:
+        return _BACK
+    return None if sel == "__new__" else sel
+
+
 # --- Banner & main menu -----------------------------------------------------
 
 
@@ -703,10 +739,12 @@ def _instances_menu(console) -> None:
         if choice == "chat":
             name = _pick_instance_or_none(console, "Chat with which instance?")
             if name and name != _BACK:
-                _clear(console, "chat", name)
-                from . import chat
+                tk = _pick_chat_thread(console, name)
+                if tk != _BACK:
+                    _clear(console, "chat", name)
+                    from . import chat
 
-                chat.repl(name, console=console)
+                    chat.repl(name, thread_key=tk, console=console)
         elif choice == "shell":
             name = _pick_instance_or_none(console, "Open a shell for which instance?")
             if name and name != _BACK:

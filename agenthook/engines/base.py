@@ -39,6 +39,7 @@ class RunSpec:
     max_turns: int | None = None
     allowed_tools: list[str] = field(default_factory=list)
     disallowed_tools: list[str] = field(default_factory=list)
+    stream: bool = False  # ask the engine to emit partial output for live streaming
     resume_session_id: str | None = None
     sandbox: bool = True  # running inside an isolated container
     extra_args: list[str] = field(default_factory=list)
@@ -63,6 +64,13 @@ class Engine(abc.ABC):
         self, stdout: str, stderr: str, exit_code: int
     ) -> tuple[Result, ClassifiedError | None]:
         """Normalize raw CLI output into (Result, error-or-None)."""
+
+    def stream_text(self, line: str) -> str | None:
+        """Given one raw stdout line from a streaming run, return the text delta
+        to display live, or None if the line carries no displayable text.
+        Engines that can't stream return None (the caller falls back to showing
+        the full result at the end)."""
+        return None
 
     # ---- auth -------------------------------------------------------------
 

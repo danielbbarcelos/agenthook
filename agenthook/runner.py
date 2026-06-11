@@ -41,6 +41,7 @@ class RunContext:
     session_home: Path | None = None
     prompt: str = ""
     log_path: Path | None = None
+    on_text: object = None  # callback(str) for live streaming, or None
     _buffer: list[str] = field(default_factory=list)
 
     def log(self, msg: str) -> None:
@@ -54,7 +55,7 @@ class RunContext:
 # --- Public entry points ----------------------------------------------------
 
 
-def run_job(job: Job, *, log_cb: LogFn | None = None) -> Job:
+def run_job(job: Job, *, log_cb: LogFn | None = None, on_text=None) -> Job:
     inst = instances.load(job.instance)
     if inst.paused:
         raise InstancePaused(f"instance {inst.name!r} is paused: {inst.paused_reason}")
@@ -72,6 +73,7 @@ def run_job(job: Job, *, log_cb: LogFn | None = None) -> Job:
         env_all=env_all,
         env_nonsecret=env_nonsecret,
         log_path=_log_path(job),
+        on_text=on_text,
     )
     if log_cb:
         _orig = ctx.log
@@ -345,7 +347,8 @@ def _run_engine(
     ctx: RunContext, prompt: str, resume_id: str | None, mode: Mode | None = None
 ) -> tuple[Result, ClassifiedError | None, str]:
     spec = _build_runspec(
-        ctx.inst, ctx.engine, ctx.job, prompt, resume_id, sandbox=ctx.cfg.use_docker, mode=mode
+        ctx.inst, ctx.engine, ctx.job, prompt, resume_id,
+        sandbox=ctx.cfg.use_docker, mode=mode, stream=ctx.on_text is not None,
     )
     timeout = ctx.inst.limits.get("timeout") if isinstance(ctx.inst.limits, dict) else None
     code, out, errtext = _exec(ctx, spec, timeout=timeout)
@@ -364,6 +367,7 @@ def _build_runspec(
     *,
     sandbox: bool,
     mode: Mode | None = None,
+    stream: bool = False,
 ) -> list[str]:
     disallowed = list(inst.limits.get("disallowed_tools", []) if isinstance(inst.limits, dict) else [])
     allowed = list(inst.limits.get("allowed_tools", []) if isinstance(inst.limits, dict) else [])
@@ -379,6 +383,7 @@ def _build_runspec(
         disallowed_tools=disallowed,
         resume_session_id=resume_id if engine.capabilities.resume else None,
         sandbox=sandbox,
+        stream=stream,
     )
     return engine.build_argv(spec)
 
@@ -393,6 +398,8 @@ def _exec(ctx: RunContext, argv: list[str], *, timeout: float | None = None) -> 
         argv = _docker_wrap(ctx, argv)
     ctx.log("exec: " + " ".join(argv[:6]) + (" …" if len(argv) > 6 else ""))
     env = _process_env(ctx)
+    if ctx.on_text is not None:
+        return _exec_stream(ctx, argv, env, timeout)
     try:
         proc = subprocess.run(
             argv,
@@ -408,6 +415,41 @@ def _exec(ctx: RunContext, argv: list[str], *, timeout: float | None = None) -> 
     except FileNotFoundError as exc:
         return 127, "", f"executable not found: {exc}"
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _exec_stream(ctx: RunContext, argv: list[str], env: dict, timeout: float | None):
+    """Run the engine streaming its stdout: each line is parsed for a text delta
+    (engine.stream_text) and pushed to ctx.on_text, while the full output is
+    buffered for the normal end-of-run parse."""
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(ctx.wt) if ctx.wt else None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        return 127, "", f"executable not found: {exc}"
+    out: list[str] = []
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            out.append(line)
+            try:
+                delta = ctx.engine.stream_text(line)
+                if delta:
+                    ctx.on_text(delta)  # type: ignore[operator]
+            except Exception:  # noqa: BLE001 — never let display break the run
+                pass
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return _TIMEOUT_CODE, "".join(out), "timeout"
+    errtext = proc.stderr.read() if proc.stderr else ""
+    return proc.returncode, "".join(out), errtext
 
 
 def _exec_shell(ctx: RunContext, cmd: str) -> tuple[int, str]:
