@@ -57,8 +57,6 @@ def repl(
 ) -> None:
     from rich.console import Console
 
-    from . import runner
-
     console = console or Console()
     try:
         inst = instances.load(name)
@@ -124,23 +122,78 @@ def repl(
 
         job = _build_job(inst, line, deliv, tk, sel)
         store.create_job(job)
-        try:
-            with console.status("[dim]thinking… (Ctrl+C to cancel)[/]", spinner="dots"):
-                job = runner.run_job(job, log_cb=lambda _m: None)
-        except KeyboardInterrupt:
-            _flush_input()
-            console.print("[#d08770]· cancelled.[/] [dim]send another message.[/]\n")
-            continue
+        done = _run_turn(console, job)
         _flush_input()  # drop input typed while it was thinking (no auto-resubmit)
+        if done is None:  # cancelled or errored — already reported
+            continue
 
         label = inst.engine
-        if job.result and job.result.text:
-            console.print(f"[bold #88c0d0]◆ {label} ›[/] {job.result.text}\n")
+        if done.result and done.result.text:
+            console.print(f"[bold #88c0d0]◆ {label} ›[/] {done.result.text}\n")
         else:
-            detail = job.error_message or job.status.value
-            console.print(f"[#d08770]◆ {label} ›[/] [dim]({job.status.value})[/] {detail}\n")
+            detail = done.error_message or done.status.value
+            raw = ""
+            if done.result and (done.result.raw or "").strip():
+                raw = "  [dim]" + done.result.raw.strip()[:500] + "[/]"
+            console.print(
+                f"[#d08770]◆ {label} ›[/] [dim]({done.status.value})[/] {detail}{raw}\n"
+            )
 
     console.print("[dim]bye.[/]")
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600}h {(s % 3600) // 60:02d}m {s % 60:02d}s"
+
+
+def _run_turn(console, job):
+    """Run one chat turn off-thread so we can show a live elapsed timer and
+    actually cancel (kill the container) on Ctrl+C. Returns the finished Job, or
+    None if cancelled/errored (already reported to the console)."""
+    import subprocess
+    import threading
+    import time
+
+    from . import runner
+    from .config import load_config
+
+    box: dict = {"job": None, "exc": None}
+
+    def work():
+        try:
+            box["job"] = runner.run_job(job, log_cb=lambda _m: None)
+        except BaseException as exc:  # noqa: BLE001 — surface anything to the REPL
+            box["exc"] = exc
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    start = time.monotonic()
+    try:
+        with console.status("[dim]thinking…[/]", spinner="dots") as st:
+            while t.is_alive():
+                st.update(
+                    f"[dim]thinking… {_fmt_elapsed(time.monotonic() - start)} "
+                    f"(Ctrl+C to cancel)[/]"
+                )
+                t.join(timeout=0.5)
+    except KeyboardInterrupt:
+        try:
+            if load_config().use_docker:
+                subprocess.run(
+                    ["docker", "kill", runner.container_name(job)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        t.join(timeout=5)
+        console.print("[#d08770]· cancelled.[/] [dim]send another message.[/]\n")
+        return None
+    if box["exc"] is not None:
+        console.print(f"[#bf616a]· engine error:[/] {box['exc']}\n")
+        return None
+    return box["job"]
 
 
 def _build_job(inst, prompt: str, deliverable: str, thread_key: str, repos) -> Job:

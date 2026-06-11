@@ -400,11 +400,17 @@ def _exec_shell(ctx: RunContext, cmd: str) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
+def container_name(job: Job) -> str:
+    """Stable name for a job's container, so callers can ``docker kill`` it."""
+    return f"agenthook-{job.id}-{job.attempts}"
+
+
 def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     # No -i: this is a headless capture. Keeping STDIN open made the engine wait
     # on the inherited terminal stdin (it never sees EOF), hanging forever — the
     # prompt is passed via argv (-p), so the container needs no stdin at all.
-    cmd = ["docker", "run", "--rm"]
+    # A stable --name lets an interactive caller (chat) cancel it with docker kill.
+    cmd = ["docker", "run", "--rm", "--name", container_name(ctx.job)]
     ro = ":ro" if ctx.job.deliverable.read_only else ""
     cmd += ["-v", f"{ctx.wt}:/workspace{ro}", "-w", "/workspace"]
     if ctx.session_home:
