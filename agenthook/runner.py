@@ -374,6 +374,7 @@ def _exec(ctx: RunContext, argv: list[str], *, timeout: float | None = None) -> 
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,  # headless: never wait on the parent's stdin
         )
     except subprocess.TimeoutExpired:
         return _TIMEOUT_CODE, "", "timeout"
@@ -394,12 +395,16 @@ def _exec_shell(ctx: RunContext, cmd: str) -> tuple[int, str]:
         env=_process_env(ctx),
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
     )
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
 def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
-    cmd = ["docker", "run", "--rm", "-i"]
+    # No -i: this is a headless capture. Keeping STDIN open made the engine wait
+    # on the inherited terminal stdin (it never sees EOF), hanging forever — the
+    # prompt is passed via argv (-p), so the container needs no stdin at all.
+    cmd = ["docker", "run", "--rm"]
     ro = ":ro" if ctx.job.deliverable.read_only else ""
     cmd += ["-v", f"{ctx.wt}:/workspace{ro}", "-w", "/workspace"]
     if ctx.session_home:
