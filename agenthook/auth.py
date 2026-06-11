@@ -57,6 +57,15 @@ def _check_one(scheme, inst, cfg, headers, body, client_ip) -> tuple[bool, str]:
         return False, "bearer mismatch"
 
     if scheme == "header":
+        configured = cfg.get("headers")
+        if configured:  # one or more required headers — all must match
+            for h in configured:
+                name = (h.get("name") or "").lower()
+                value = _secret(inst, h.get("value_env", ""))
+                if not (value and hmac.compare_digest(headers.get(name, ""), value)):
+                    return False, "header mismatch"
+            return True, "header ok"
+        # legacy single header (header_name + header_value_env)
         name = (cfg.get("header_name") or "X-API-Key").lower()
         value = _secret(inst, cfg.get("header_value_env", DEFAULTS["header_value_env"]))
         if value and hmac.compare_digest(headers.get(name, ""), value):

@@ -1338,95 +1338,112 @@ def _edit_github(console, name: str) -> None:
 
 
 def _webhook_status(inst) -> str:
-    wa = inst.webhook_auth or {}
-    schemes = wa.get("schemes") or []
-    ips = wa.get("ip_allow") or []
-    parts = []
-    if schemes:
-        parts.append("+".join(schemes))
-    if ips:
-        parts.append(f"{len(ips)} IP(s)")
-    return ", ".join(parts) if parts else "open (no auth)"
+    headers = (inst.webhook_auth or {}).get("headers") or []
+    if not headers and (inst.webhook_auth or {}).get("header_name"):
+        headers = [1]  # legacy single header
+    return f"{len(headers)} header(s)" if headers else "open (no auth)"
+
+
+def _header_env(name: str) -> str:
+    """Encrypted-secret env var name that backs a required header's value."""
+    import re
+
+    safe = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_") or "X"
+    return f"AGENTHOOK_HEADER_{safe}"
+
+
+def _mask_value(v: str) -> str:
+    """Show the first few characters, obfuscate the rest."""
+    if not v:
+        return ""
+    keep = min(3, len(v))
+    return v[:keep] + "•" * 8
 
 
 def _edit_webhook(console, name: str) -> None:
+    """Webhook protection by required request headers: add as many key+value
+    pairs as you like. The endpoint accepts a request only if every configured
+    header matches. Values are stored encrypted (shown masked here)."""
     import questionary
-    from rich.panel import Panel
 
-    schemes_all = ["bearer", "hmac", "header", "ip-allow"]
     while True:
         inst = instances.load(name)
         wa = dict(inst.webhook_auth or {})
-        schemes = list(wa.get("schemes") or [])
-        ips = list(wa.get("ip_allow") or [])
+        headers = list(wa.get("headers") or [])
+        backend = secrets.get_backend(inst)
         _clear(console, "instances", name, "webhook access")
         console.print()
         console.print(
-            Panel(
-                f"[{STONE}]schemes  [/][{BONE}]{', '.join(schemes) or 'none (open)'}[/]\n"
-                f"[{STONE}]ip allow [/][{BONE}]{', '.join(ips) or 'any'}[/]\n"
-                f"[{STONE}]header   [/][dim]{wa.get('header_name') or '-'}[/]\n"
-                f"[{STONE}]endpoint [/][dim]POST /hook/{name}[/]",
-                title=f"Webhook access · {name}",
-                border_style=BORDER,
-                padding=(0, 2),
-                expand=False,
-            )
+            f"  [dim]POST /hook/{name}  ·  a request must send every header below[/]"
+        )
+        rows = []
+        for h in headers:
+            val = ""
+            try:
+                val = backend.get(inst, h.get("value_env", "")) or ""
+            except Exception:  # noqa: BLE001
+                val = ""
+            rows.append((h.get("name", ""), f"[dim]{_mask_value(val)}[/]"))
+        console.print(
+            _table(["header", "value"], rows, "no headers — requests are unauthenticated")
         )
         act = _select(
-            "Manage webhook access",
+            "Manage request headers",
             [
-                _action("schemes", "choose auth schemes"),
-                _action("add ip", "allow a CIDR / IP", value="add ip"),
-                _action("remove ip", "revoke a CIDR / IP", value="remove ip"),
+                _action("add", "add a required header (key + value)"),
+                _action("remove", "remove a header"),
                 _sep(),
                 _back_choice(),
             ],
         )
         if act is None or act == _BACK:
             return
-        if act == "schemes":
-            print()
-            picked = questionary.checkbox(
-                "Auth schemes (space toggles, Enter confirms):",
-                choices=[
-                    questionary.Choice(s, checked=(s in schemes)) for s in schemes_all
-                ],
-                qmark="?",
-                style=_style(),
+        if act == "add":
+            key = questionary.text(
+                "Header name (e.g. X-API-Key):", qmark="?", style=_style()
             ).ask()
-            if picked is not None:
-                wa["schemes"] = picked
-                inst.webhook_auth = wa
-                _save_inst(console, inst)
-                if any(s in picked for s in ("bearer", "hmac", "header")):
-                    console.print(
-                        f"[{STONE}]note: bearer/hmac/header need a secret — set it in "
-                        f"env vars (e.g. AGENTHOOK_WEBHOOK_SECRET).[/]"
-                    )
-                _pause(console)
-        elif act == "add ip":
-            val = questionary.text(
-                "CIDR or IP (e.g. 10.0.0.0/8 or 1.2.3.4):", qmark="?", style=_style()
-            ).ask()
-            if val and val.strip():
-                ips.append(val.strip())
-                wa["ip_allow"] = ips
-                if "ip-allow" not in schemes:
-                    wa["schemes"] = schemes + ["ip-allow"]
-                inst.webhook_auth = wa
-                _save_inst(console, inst)
-        elif act == "remove ip":
-            if not ips:
+            if not key or not key.strip():
                 continue
-            target = _select("Remove which?", ips + [_sep(), _back_choice()])
-            if target and target != _BACK:
-                ips = [i for i in ips if i != target]
-                wa["ip_allow"] = ips
-                if not ips and "ip-allow" in schemes:
-                    wa["schemes"] = [s for s in schemes if s != "ip-allow"]
-                inst.webhook_auth = wa
-                _save_inst(console, inst)
+            key = key.strip()
+            value = questionary.password(
+                "Header value (stored encrypted):", qmark="?", style=_style()
+            ).ask()
+            if not value:
+                console.print(f"[{CLAY}]cancelled (no value).[/]")
+                _pause(console)
+                continue
+            env_name = _header_env(key)
+            backend.set(inst, env_name, value, True)
+            headers = [h for h in headers if h.get("name", "").lower() != key.lower()]
+            headers.append({"name": key, "value_env": env_name})
+            wa["headers"] = headers
+            schemes = list(wa.get("schemes") or [])
+            if "header" not in schemes:
+                schemes.append("header")
+            wa["schemes"] = schemes
+            inst.webhook_auth = wa
+            _save_inst(console, inst)
+        elif act == "remove":
+            if not headers:
+                continue
+            target = _select(
+                "Remove which header?",
+                [h.get("name") for h in headers] + [_sep(), _back_choice()],
+            )
+            if not target or target == _BACK:
+                continue
+            for h in headers:
+                if h.get("name") == target:
+                    try:
+                        backend.delete(inst, h.get("value_env", ""))
+                    except Exception:  # noqa: BLE001
+                        pass
+            headers = [h for h in headers if h.get("name") != target]
+            wa["headers"] = headers
+            if not headers:
+                wa["schemes"] = [s for s in (wa.get("schemes") or []) if s != "header"]
+            inst.webhook_auth = wa
+            _save_inst(console, inst)
 
 
 # --- Repo pool editor (design §11) ------------------------------------------
