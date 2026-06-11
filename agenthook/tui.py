@@ -114,20 +114,182 @@ def _action(label: str, desc: str = "", value: str | None = None, disabled: str 
     ``disabled`` greys it out and blocks selection (e.g. no instances yet)."""
     import questionary
 
-    title: list = [("", f"{label:<13}")]
+    title: list = [("", f"{label:<16}")]
     if desc:
         title.append((_MUTED, desc))
     return questionary.Choice(title=title, value=value or label, disabled=disabled)
 
 
-def _select(message: str, choices: list, *, qmark: str = "?", instruction: str | None = None):
+def _title_tuples(c) -> list:
+    """Normalize a choice's title into prompt_toolkit (style, text) fragments."""
+    title = getattr(c, "title", c)
+    if isinstance(title, list):
+        return [(str(s), str(t)) for s, t in title]
+    return [("", str(title))]
+
+
+def _select(
+    message: str,
+    choices: list,
+    *,
+    qmark: str = "?",
+    instruction: str | None = None,
+    header: str | None = None,
+):
+    """Arrow-key menu inside a rounded container (design-system box), with the
+    description column aligned. Falls back to questionary if prompt_toolkit
+    can't run (e.g. an exotic terminal)."""
+    if not _interactive():
+        for c in choices:
+            import questionary
+
+            if not isinstance(c, questionary.Separator):
+                return c.value if hasattr(c, "value") else c
+        return None
+    try:
+        return _boxed_select(message, choices, header=header)
+    except Exception:  # noqa: BLE001 — never let the menu hard-fail
+        return _select_q(message, choices, qmark=qmark, instruction=instruction)
+
+
+def _select_q(message, choices, *, qmark="?", instruction=None):
     import questionary
 
-    print()  # breathing room above every menu
+    print()
     kw = dict(choices=choices, qmark=qmark, pointer="●", style=_style())
     if instruction is not None:
         kw["instruction"] = instruction
     return questionary.select(message, **kw).ask()
+
+
+def _pt_style():
+    from prompt_toolkit.styles import Style
+
+    return Style.from_dict(
+        {
+            "frame.border": AMBER,
+            "frame.label": f"bold {BONE}",
+            "pointer": f"{AMBER} bold",
+            "sel": f"{AMBER} bold",
+            "name": BONE,
+            "desc": STONE,
+            "sep": STONE,
+            "off": STONE,
+            "head": STONE,
+        }
+    )
+
+
+def _boxed_select(message: str, choices: list, *, header: str | None = None):
+    import questionary
+    from prompt_toolkit import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, VSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.widgets import Frame
+
+    rows: list[dict] = []
+    for c in choices:
+        if isinstance(c, questionary.Separator):
+            raw = str(c.title).strip().strip("─").strip()
+            rows.append({"sep": True, "label": raw})
+        elif isinstance(c, questionary.Choice):
+            rows.append(
+                {
+                    "sep": False,
+                    "value": c.value,
+                    "frags": _title_tuples(c),
+                    "disabled": bool(c.disabled),
+                    "dis": c.disabled if isinstance(c.disabled, str) else "",
+                }
+            )
+        else:
+            rows.append({"sep": False, "value": c, "frags": [("", str(c))], "disabled": False, "dis": ""})
+
+    selectable = [i for i, r in enumerate(rows) if not r["sep"] and not r["disabled"]]
+    if not selectable:
+        return None
+    pos = {"i": selectable[0]}
+
+    def _len(r) -> int:
+        return 2 + sum(len(t) for _, t in r["frags"]) + len(r.get("dis", ""))
+
+    inner_w = max(
+        [_len(r) for r in rows if not r["sep"]]
+        + ([len(header) + 2] if header else [])
+        + [len(message)]
+    )
+
+    def fragments():
+        out: list = []
+        if header:
+            out += [("class:head", "  " + header), ("", "\n")]
+        for i, r in enumerate(rows):
+            if r["sep"]:
+                lbl = r["label"]
+                line = f"  ─── {lbl} " if lbl else "  "
+                line += "─" * max(0, inner_w - len(line))
+                out += [("class:sep", line), ("", "\n")]
+                continue
+            sel = i == pos["i"]
+            out.append(("class:pointer", "● ") if sel else ("", "  "))
+            if r["disabled"]:
+                text = "".join(t for _, t in r["frags"]) + (r["dis"] or "")
+                out.append(("class:off", text))
+            else:
+                for st, txt in r["frags"]:
+                    # the default-styled name fragment glows amber when selected;
+                    # already-colored fragments (status, etc.) keep their color.
+                    if st == "":
+                        out.append(("class:sel" if sel else "class:name", txt))
+                    else:
+                        out.append((st, txt))
+            out.append(("", "\n"))
+        if out and out[-1] == ("", "\n"):
+            out.pop()
+        return out
+
+    control = FormattedTextControl(fragments, focusable=True, show_cursor=False)
+    body = Window(control, dont_extend_height=True, dont_extend_width=True)
+    frame = Frame(body, title=message)
+    root = VSplit([frame, Window()])
+
+    kb = KeyBindings()
+
+    def _move(delta: int) -> None:
+        idx = selectable.index(pos["i"]) if pos["i"] in selectable else 0
+        pos["i"] = selectable[(idx + delta) % len(selectable)]
+
+    @kb.add("up")
+    @kb.add("c-p")
+    @kb.add("k")
+    def _(e):
+        _move(-1)
+
+    @kb.add("down")
+    @kb.add("c-n")
+    @kb.add("j")
+    def _(e):
+        _move(1)
+
+    @kb.add("enter")
+    def _(e):
+        e.app.exit(result=rows[pos["i"]]["value"])
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    def _(e):
+        e.app.exit(result=None)
+
+    print()
+    app = Application(
+        layout=Layout(root),
+        key_bindings=kb,
+        style=_pt_style(),
+        full_screen=False,
+        mouse_support=False,
+    )
+    return app.run()
 
 
 def confirm(prompt: str) -> bool:
@@ -430,7 +592,6 @@ def _instances_menu(console) -> None:
                 _action("add", "register a new instance"),
                 _action("view", "inspect config, repos, env & jobs", disabled=dis),
                 _action("edit", "change config or authentication", disabled=dis),
-                _action("list", "all instances at a glance", disabled=dis),
                 _action("remove", "delete an instance", disabled=dis),
                 _sep(),
                 _back_choice(),
@@ -464,10 +625,6 @@ def _instances_menu(console) -> None:
             _instance_edit(console)
         elif choice == "remove":
             _instance_delete(console)
-        elif choice == "list":
-            _clear(console, "instances", "list")
-            _show_instances(console)
-            _pause(console)
 
 
 def _pause(console) -> None:
@@ -1168,21 +1325,14 @@ def _jobs_menu(console) -> None:
     while True:
         _clear(console, "jobs")
         jobs = store.list_jobs(limit=20)
-        console.print()
-        console.print(
-            f"  [{AMBER} bold]jobs[/]   [{STONE}]{len(jobs)} recent · ↵ to open a job[/]"
-        )
         if not jobs:
-            console.print(f"  [{RUST}]no jobs yet.[/]")
-        # The header is the picker's own message (no extra '? …' line between
-        # the column header and the rows). 3-space indent aligns with rows.
-        header = f"   {'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<10}AGE"
+            console.print(f"\n  [{RUST}]no jobs yet.[/]")
+        header = f"{'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<10}AGE"
         choice = _select(
-            header,
+            f"jobs · {len(jobs)} recent",
             [_job_choice(j) for j in jobs]
             + [_sep(), _action("refresh", "reload the list"), _back_choice()],
-            qmark="",
-            instruction="",
+            header=header,
         )
         if choice is None or choice == _BACK:
             return
@@ -1355,12 +1505,8 @@ def _sessions_menu(console) -> None:
     while True:
         _clear(console, "sessions")
         sessions = store.list_sessions()
-        console.print()
-        console.print(
-            f"  [{AMBER} bold]sessions[/][{STONE}]   durable threads shared across jobs[/]"
-        )
         if not sessions:
-            console.print(f"  [{RUST}]no sessions yet.[/]")
+            console.print(f"\n  [{RUST}]no sessions yet.[/]")
         import questionary
 
         choices = []
@@ -1375,9 +1521,9 @@ def _sessions_menu(console) -> None:
                     value=s.id,
                 )
             )
-        header = f"   {'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST"
+        header = f"{'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST"
         choice = _select(
-            header, choices + [_sep(), _back_choice()], qmark="", instruction=""
+            "sessions", choices + [_sep(), _back_choice()], header=header
         )
         if choice is None or choice == _BACK:
             return
