@@ -98,31 +98,36 @@ def _back_choice(label: str = "back"):
 
 
 def _sep(label: str = ""):
+    """A labelled divider. Aligned to the option text column: questionary
+    prefixes every *choice* with 3 chars (' ● ' / '   ') but separators with
+    none, so we pad separators by 3 to line them up with the labels above."""
     import questionary
 
     if not label:
-        return questionary.Separator("  ───  ──────────────────────────")
-    pad = max(0, 30 - len(label))
-    return questionary.Separator(f"  ─── {label} " + "─" * pad)
+        return questionary.Separator("   ──────────────────────────────")
+    pad = max(0, 28 - len(label))
+    return questionary.Separator(f"   ─── {label} " + "─" * pad)
 
 
-def _action(label: str, desc: str = "", value: str | None = None):
-    """A menu row: action name (highlights amber when selected) + muted hint."""
+def _action(label: str, desc: str = "", value: str | None = None, disabled: str | None = None):
+    """A menu row: action name (highlights amber when selected) + muted hint.
+    ``disabled`` greys it out and blocks selection (e.g. no instances yet)."""
     import questionary
 
     title: list = [("", f"{label:<13}")]
     if desc:
         title.append((_MUTED, desc))
-    return questionary.Choice(title=title, value=value or label)
+    return questionary.Choice(title=title, value=value or label, disabled=disabled)
 
 
-def _select(message: str, choices: list):
+def _select(message: str, choices: list, *, qmark: str = "?", instruction: str | None = None):
     import questionary
 
     print()  # breathing room above every menu
-    return questionary.select(
-        message, choices=choices, qmark="?", pointer="●", style=_style()
-    ).ask()
+    kw = dict(choices=choices, qmark=qmark, pointer="●", style=_style())
+    if instruction is not None:
+        kw["instruction"] = instruction
+    return questionary.select(message, **kw).ask()
 
 
 def confirm(prompt: str) -> bool:
@@ -411,20 +416,27 @@ def _serve(console) -> None:
 
 def _instances_menu(console) -> None:
     while True:
+        names = instances.list_names()
+        has = bool(names)
         _clear(console, "instances")
+        _show_instances(console)  # the list, right up front (design req)
+        if not has:
+            console.print(
+                f"\n  [{RUST}]⚠ no instances yet — choose “add” to create your first.[/]"
+            )
+        dis = None if has else "needs an instance"
         choice = _select(
             "instances — pick an action",
             choices=[
                 _sep("interact"),
-                _action("chat", "talk to the agent in a container"),
-                _action("shell", "open a bash shell in a container"),
+                _action("chat", "talk to the agent in a container", disabled=dis),
+                _action("shell", "open a bash shell in a container", disabled=dis),
                 _sep("manage"),
                 _action("add", "register a new instance"),
-                _action("view", "inspect config, repos, env & jobs"),
-                _action("edit", "change config or authentication"),
-                _sep("list · remove"),
-                _action("list", "all instances at a glance"),
-                _action("remove", "delete an instance"),
+                _action("view", "inspect config, repos, env & jobs", disabled=dis),
+                _action("edit", "change config or authentication", disabled=dis),
+                _action("list", "all instances at a glance", disabled=dis),
+                _action("remove", "delete an instance", disabled=dis),
                 _sep(),
                 _back_choice(),
             ],
@@ -734,6 +746,43 @@ def _section(console, title: str) -> None:
 def _kv(console, key: str, value: str, muted: bool = False) -> None:
     color = STONE if muted else BONE
     console.print(f"  [{STONE}]{key:<14}[/][{color}]{value}[/]")
+
+
+def _table(columns: list[str], rows: list, empty_msg: str):
+    """A rounded-border table (design-system box). When there are no rows it
+    renders the same bordered box with the headers and a single, full-width
+    'no data' message spanning all columns, in the error color."""
+    from rich import box
+    from rich.table import Table
+
+    if rows:
+        t = Table(
+            box=box.ROUNDED,
+            border_style=STONE,
+            header_style=f"bold {BONE}",
+            pad_edge=False,
+            expand=False,
+        )
+        for col in columns:
+            t.add_column(col)
+        for r in rows:
+            t.add_row(*r)
+        return t
+
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.text import Text
+
+    head = Text("   ".join(columns), style=f"bold {BONE}")
+    msg = Text(empty_msg, style=RUST, justify="center")
+    return Panel(
+        Group(head, Rule(style=STONE), msg),
+        box=box.ROUNDED,
+        border_style=STONE,
+        padding=(0, 1),
+        expand=False,
+    )
 
 
 # --- Delete instance --------------------------------------------------------
@@ -1092,20 +1141,26 @@ def _edit_env(console, name: str) -> None:
 
 
 def _show_instances(console) -> None:
-    from rich.table import Table
-
-    t = Table("name", "engine", "deliverable", "repos", "status", box=None, pad_edge=False)
+    rows = []
     for inst in instances.list_all():
         names = inst.repo_names()
-        t.add_row(
-            f"[{AMBER}]{inst.name}[/]",
-            inst.engine,
-            inst.deliverable,
-            ", ".join(names) if names else "-",
-            _inst_badge(inst),
+        rows.append(
+            (
+                f"[{AMBER}]{inst.name}[/]",
+                inst.engine,
+                inst.deliverable,
+                ", ".join(names) if names else "-",
+                _inst_badge(inst),
+            )
         )
     console.print()
-    console.print(t)
+    console.print(
+        _table(
+            ["name", "engine", "deliverable", "repos", "status"],
+            rows,
+            "no instances yet — choose “add” to create one",
+        )
+    )
 
 
 # --- Jobs (design §12 / §13) ------------------------------------------------
@@ -1117,18 +1172,19 @@ def _jobs_menu(console) -> None:
         jobs = store.list_jobs(limit=20)
         console.print()
         console.print(
-            f"  [{AMBER} bold]jobs[/]   "
-            f"[{STONE}]{len(jobs)} recent · ↵ to open a job[/]"
-        )
-        console.print(
-            f"  [{STONE}]{'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<12}AGE[/]"
+            f"  [{AMBER} bold]jobs[/]   [{STONE}]{len(jobs)} recent · ↵ to open a job[/]"
         )
         if not jobs:
-            console.print(f"\n  [{STONE}]no jobs yet.[/]")
+            console.print(f"  [{RUST}]no jobs yet.[/]")
+        # The header is the picker's own message (no extra '? …' line between
+        # the column header and the rows). 3-space indent aligns with rows.
+        header = f"   {'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<10}AGE"
         choice = _select(
-            "jobs",
+            header,
             [_job_choice(j) for j in jobs]
             + [_sep(), _action("refresh", "reload the list"), _back_choice()],
+            qmark="",
+            instruction="",
         )
         if choice is None or choice == _BACK:
             return
@@ -1305,11 +1361,8 @@ def _sessions_menu(console) -> None:
         console.print(
             f"  [{AMBER} bold]sessions[/][{STONE}]   durable threads shared across jobs[/]"
         )
-        console.print(
-            f"  [{STONE}]{'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST[/]"
-        )
         if not sessions:
-            console.print(f"\n  [{STONE}]no sessions yet.[/]")
+            console.print(f"  [{RUST}]no sessions yet.[/]")
         import questionary
 
         choices = []
@@ -1324,7 +1377,10 @@ def _sessions_menu(console) -> None:
                     value=s.id,
                 )
             )
-        choice = _select("sessions", choices + [_sep(), _back_choice()])
+        header = f"   {'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST"
+        choice = _select(
+            header, choices + [_sep(), _back_choice()], qmark="", instruction=""
+        )
         if choice is None or choice == _BACK:
             return
         _session_view(console, choice)
