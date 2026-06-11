@@ -32,6 +32,7 @@ RUST = "#bf616a"  # error / failed
 LILAC = "#b48ead"  # plan / session — the "thinking" hue
 STONE = "#6f6a5d"  # muted
 BONE = "#e8e3d8"  # foreground
+BORDER = "#45413a"  # subtle box border — darker than muted, just a hairline
 
 _MUTED = f"fg:{STONE}"
 
@@ -167,7 +168,7 @@ def _pt_style():
 
     return Style.from_dict(
         {
-            "frame.border": AMBER,
+            "frame.border": BORDER,
             "frame.label": f"bold {BONE}",
             "pointer": f"{AMBER} bold",
             "sel": f"{AMBER} bold",
@@ -488,6 +489,10 @@ def _banner(console) -> None:
         (f"agenthook  [{STONE}]v{_version()}", "bold white"),
         (f"[{STONE}]self-hosted agent task runner", "dim"),
     ]
+    from rich import box
+    from rich.console import Group
+    from rich.panel import Panel
+
     art = Text()
     for i in range(3):
         art.append(f"{logo[i]:<10}", style=f"bold {AMBER}")
@@ -495,20 +500,26 @@ def _banner(console) -> None:
         art.append(Text.from_markup(meta[i][0]))
         if i < 2:
             art.append("\n")
-    console.print()
-    console.print(art)
-    console.print()
 
     srv = f"[{SAGE}]● up[/] [{STONE}]:{port}[/]" if up else f"[{STONE}]○ down[/]"
-    console.print(
+    status = Text.from_markup(
         f"[{BONE}]{n_inst} instance(s)[/][{STONE}] · [/]"
         f"[{AMBER}]{counts['running']} running[/][{STONE}] · [/]"
         f"[{STONE}]{counts['queued']} queued[/][{STONE}] · [/]"
-        f"[{BONE}]server[/] {srv}",
-        highlight=False,
+        f"[{BONE}]server[/] {srv}"
     )
+    hints = Text.from_markup(
+        f"[{STONE}]↑↓ move · ↵ select · esc back · Ctrl+C 2× to quit[/]"
+    )
+    console.print()
     console.print(
-        f"[{STONE}]↑↓ move · ↵ select · / filter · Ctrl+C 2× to quit[/]", highlight=False
+        Panel(
+            Group(art, Text(""), status, hints),
+            box=box.ROUNDED,
+            border_style=BORDER,
+            padding=(0, 2),
+            expand=False,
+        )
     )
 
 
@@ -963,7 +974,7 @@ def _table(columns: list[str], rows: list, empty_msg: str):
     if rows:
         t = Table(
             box=box.ROUNDED,
-            border_style=STONE,
+            border_style=BORDER,
             header_style=f"bold {BONE}",
             pad_edge=False,
             expand=False,
@@ -982,9 +993,9 @@ def _table(columns: list[str], rows: list, empty_msg: str):
     head = Text("   ".join(columns), style=f"bold {BONE}")
     msg = Text(empty_msg, style=RUST, justify="center")
     return Panel(
-        Group(head, Rule(style=STONE), msg),
+        Group(head, Rule(style=BORDER), msg),
         box=box.ROUNDED,
-        border_style=STONE,
+        border_style=BORDER,
         padding=(0, 1),
         expand=False,
     )
@@ -1154,7 +1165,7 @@ def _edit_auth(console, name: str) -> None:
                 f"[{STONE}]engine   [/][{BONE}]{inst.engine}[/]\n"
                 f"[{STONE}]scope    [/][dim]this instance only[/]",
                 title=f"Authentication · {name}",
-                border_style=AMBER,
+                border_style=BORDER,
                 padding=(0, 2),
                 expand=False,
             )
@@ -1258,7 +1269,7 @@ def _edit_github(console, name: str) -> None:
                 f"[{STONE}]scope    [/][dim]this instance only (encrypted)[/]\n"
                 f"[{STONE}]used by  [/][dim]git push · gh pr create[/]",
                 title=f"GitHub · {name}",
-                border_style=AMBER,
+                border_style=BORDER,
                 padding=(0, 2),
                 expand=False,
             )
@@ -1332,7 +1343,7 @@ def _edit_webhook(console, name: str) -> None:
                 f"[{STONE}]header   [/][dim]{wa.get('header_name') or '-'}[/]\n"
                 f"[{STONE}]endpoint [/][dim]POST /hook/{name}[/]",
                 title=f"Webhook access · {name}",
-                border_style=AMBER,
+                border_style=BORDER,
                 padding=(0, 2),
                 expand=False,
             )
