@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at REAL,
     updated_at REAL,
     job_count INTEGER DEFAULT 0,
+    description TEXT DEFAULT '',
     UNIQUE(instance, thread_key)
 );
 
@@ -100,6 +101,7 @@ def _conn() -> Iterator[sqlite3.Connection]:
     conn.execute("PRAGMA foreign_keys=ON")
     if str(db_path) not in _initialized_paths:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         _initialized_paths.add(str(db_path))
     try:
         yield conn
@@ -108,9 +110,17 @@ def _conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight additive migrations for already-created databases."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}  # r[1] = column name
+    if "description" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN description TEXT DEFAULT ''")
+
+
 def init_db() -> None:
     with _conn() as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
 
 
 # --- Jobs -------------------------------------------------------------------
@@ -273,8 +283,8 @@ def find_or_create_session(instance: str, thread_key: str) -> Session:
         sess = Session(instance=instance, thread_key=thread_key, status=SessionStatus.OPEN)
         d = session_to_dict(sess)
         conn.execute(
-            "INSERT INTO sessions (id,instance,thread_key,engine_session_id,status,created_at,updated_at,job_count)"
-            " VALUES (:id,:instance,:thread_key,:engine_session_id,:status,:created_at,:updated_at,:job_count)",
+            "INSERT INTO sessions (id,instance,thread_key,engine_session_id,status,created_at,updated_at,job_count,description)"
+            " VALUES (:id,:instance,:thread_key,:engine_session_id,:status,:created_at,:updated_at,:job_count,:description)",
             d,
         )
         return sess
@@ -284,9 +294,35 @@ def save_session(sess: Session) -> None:
     sess.updated_at = time.time()
     with _lock, _conn() as conn:
         conn.execute(
-            "UPDATE sessions SET engine_session_id=?,status=?,updated_at=?,job_count=? WHERE id=?",
-            (sess.engine_session_id, sess.status.value, sess.updated_at, sess.job_count, sess.id),
+            "UPDATE sessions SET engine_session_id=?,status=?,updated_at=?,job_count=?,description=? WHERE id=?",
+            (sess.engine_session_id, sess.status.value, sess.updated_at,
+             sess.job_count, sess.description, sess.id),
         )
+
+
+def set_session_description(session_id: str, description: str) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE sessions SET description=?,updated_at=? WHERE id=?",
+            (description, time.time(), session_id),
+        )
+
+
+def delete_session(session_id: str) -> int:
+    """Delete a chat: the session row, its jobs, and the persisted engine session
+    volume. Returns the number of jobs removed."""
+    import shutil
+
+    with _lock, _conn() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) c FROM jobs WHERE session_id=?", (session_id,)
+        ).fetchone()["c"]
+        conn.execute("DELETE FROM jobs WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+    vol = paths.sessions_dir() / session_id
+    if vol.exists():
+        shutil.rmtree(vol, ignore_errors=True)
+    return n
 
 
 def get_session(session_id: str) -> Session | None:

@@ -21,6 +21,7 @@ from .models import Deliverable, Job, Mode
 _HELP = """[dim]commands:
   /help              this help
   /new               start over (new thread, drops the context)
+  /note TEXT         set a description for this chat (shown in sessions)
   /repos a,b         use only these pool repos ('' = none, /repos with no arg = all)
   /deliverable NAME  switch the deliverable (analysis, action, patch, commit, pr)
   /exit  /quit       leave[/]"""
@@ -153,6 +154,12 @@ def repl(
         if line == "/new":
             tk = f"enter-{uuid.uuid4().hex[:8]}"
             console.print(f"[dim]new thread: {tk} (context reset)[/]")
+            continue
+        if line.startswith("/note"):
+            note = line[len("/note"):].strip()
+            sess = store.find_or_create_session(name, tk)
+            store.set_session_description(sess.id, note)
+            console.print(f"[dim]note {'set' if note else 'cleared'}: {note}[/]")
             continue
         if line.startswith("/repos"):
             arg = line[len("/repos"):].strip()

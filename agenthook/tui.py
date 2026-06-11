@@ -494,7 +494,7 @@ def _pick_chat_thread(console, name: str):
 
     choices = [_action("new chat", "start a fresh conversation", value="__new__")]
     for s in sessions[:12]:
-        prev = (last_prompt.get(s.thread_key, "") or "").replace("\n", " ")[:38]
+        prev = (s.description or last_prompt.get(s.thread_key, "") or "").replace("\n", " ")[:38]
         choices.append(
             questionary.Choice(
                 title=[
@@ -1942,23 +1942,63 @@ def _sessions_menu(console) -> None:
 
         choices = []
         for s in sessions:
+            label = (s.description or s.thread_key)[:18]
             choices.append(
                 questionary.Choice(
                     title=[
-                        (f"fg:{LILAC}", f"{s.thread_key:<18}"),
+                        (f"fg:{LILAC}", f"{label:<18}"),
                         ("", f"{s.instance:<14}"),
                         (_MUTED, f"{s.job_count:<6}{_ago(s.updated_at)}"),
                     ],
                     value=s.id,
                 )
             )
-        header = f"{'THREAD KEY':<18}{'INSTANCE':<14}{'JOBS':<6}LAST"
+        if sessions:
+            choices += [
+                _sep(),
+                _action("delete chats", "remove one or more chats", value="__delete__"),
+            ]
+        header = f"{'CHAT':<18}{'INSTANCE':<14}{'JOBS':<6}LAST"
         choice = _select(
             "sessions", choices + [_sep(), _back_choice()], header=header
         )
         if choice is None or choice == _BACK:
             return
-        _session_view(console, choice)
+        if choice == "__delete__":
+            _delete_sessions(console, sessions)
+        else:
+            _session_view(console, choice)
+
+
+def _delete_sessions(console, sessions) -> None:
+    import questionary
+
+    print()
+    picked = questionary.checkbox(
+        "Select chats to delete (space toggles, Enter confirms):",
+        choices=[
+            questionary.Choice(
+                title=f"{(s.description or s.thread_key)[:24]:<24}  "
+                f"{s.instance}  ·  {s.job_count} msg  ·  {_ago(s.updated_at)}",
+                value=s.id,
+            )
+            for s in sessions
+        ],
+        qmark="?",
+        style=_style(),
+    ).ask()
+    if not picked:
+        return
+    if not confirm(
+        f"Delete {len(picked)} chat(s) and all their messages? This is irreversible."
+    ):
+        console.print(f"[{STONE}]cancelled.[/]")
+        return
+    total = sum(store.delete_session(sid) for sid in picked)
+    console.print(
+        f"[{SAGE}]✓ deleted {len(picked)} chat(s)[/] [{STONE}]({total} messages).[/]"
+    )
+    _pause(console)
 
 
 def _session_view(console, session_id: str) -> None:
@@ -1975,6 +2015,8 @@ def _session_view(console, session_id: str) -> None:
         f"  [{LILAC} bold]{sess.thread_key}[/]   [{BONE}]{sess.instance}[/]"
         f"[{STONE}]   ·  {len(jobs)} jobs   ·  opened {_ago(sess.created_at)}[/]"
     )
+    if sess.description:
+        console.print(f"  [dim]“{sess.description}”[/]")
     first_prompt = jobs[-1].prompt if jobs else ""
     if first_prompt:
         _section(console, "thread context")
@@ -1995,6 +2037,8 @@ def _session_view(console, session_id: str) -> None:
         [
             _action("open job", "inspect a job in this thread", value="open job"),
             _action("resume", "resume this thread in chat", value="resume"),
+            _action("note", "add / edit a description", value="note"),
+            _action("delete", "delete this chat", value="delete"),
             _sep(),
             _back_choice(),
         ],
@@ -2008,3 +2052,19 @@ def _session_view(console, session_id: str) -> None:
         from . import chat
 
         chat.repl(sess.instance, thread_key=sess.thread_key, console=console)
+    elif act == "note":
+        import questionary
+
+        new = questionary.text(
+            "Description / note:", default=sess.description or "", qmark="?", style=_style()
+        ).ask()
+        if new is not None:
+            store.set_session_description(sess.id, new.strip())
+            console.print(f"[{SAGE}]✓ note saved.[/]")
+            _pause(console)
+    elif act == "delete":
+        if confirm(f"Delete this chat and its {len(jobs)} message(s)? This is irreversible."):
+            n = store.delete_session(sess.id)
+            console.print(f"[{SAGE}]✓ deleted[/] [{STONE}]({n} messages).[/]")
+            _pause(console)
+            return  # the session is gone — back to the sessions list

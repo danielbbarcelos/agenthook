@@ -181,3 +181,4 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     job_count: int = 0
+    description: str = ""  # user note/description for the chat (§29)
