@@ -230,6 +230,7 @@ def _execute_with_retries(ctx: RunContext) -> None:
 
     session = store.get_session(job.session_id) if job.session_id else None
     resume_id = session.engine_session_id if session else None
+    resume_recovered = False
 
     while True:
         job.attempts += 1
@@ -241,6 +242,19 @@ def _execute_with_retries(ctx: RunContext) -> None:
             _on_engine_success(ctx, result, session)
             return
 
+        # Stale resume: the engine can't find the prior session (ephemeral
+        # container lost it). Drop the resume and retry once from a fresh session
+        # so the chat continues instead of hard-erroring.
+        if resume_id and not resume_recovered and _is_missing_session(err, result):
+            ctx.log("resume target not found; starting a fresh engine session")
+            resume_id = None
+            resume_recovered = True
+            if session is not None:
+                session.engine_session_id = None
+                store.save_session(session)
+            job.attempts -= 1  # this attempt didn't really count
+            continue
+
         ctx.log(f"engine error: {err.error_class.value}: {err.message}")
         cap = 1 if err.error_class in RETRY_ONCE else max_attempts
         if err.retryable and job.attempts < cap:
@@ -251,6 +265,19 @@ def _execute_with_retries(ctx: RunContext) -> None:
 
         _on_engine_error(ctx, err, result)
         return
+
+
+def _is_missing_session(err, result: Result) -> bool:
+    """Detect 'the resume target no longer exists' from the engine output, so we
+    can transparently start a fresh session instead of failing the turn."""
+    blob = " ".join(
+        [
+            (getattr(err, "message", "") or ""),
+            (result.text or ""),
+            (result.raw or "")[:800],
+        ]
+    ).lower()
+    return "no conversation found" in blob or "no session found" in blob
 
 
 def _on_engine_success(ctx: RunContext, result: Result, session) -> None:
