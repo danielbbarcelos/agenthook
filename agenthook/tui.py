@@ -890,15 +890,18 @@ def _wizard_repos(console, vals, derive) -> bool:
             return False
         if act == "done":
             return True
-        spec = questionary.text("repo (name=url or url):", qmark="?", style=style).ask()
-        if not spec:
+        url = questionary.text(
+            "Repository URL:", default=_GH_PREFILL, qmark="?", style=style
+        ).ask()
+        if not url or url.strip() in ("", _GH_PREFILL):
             continue
-        if "=" in spec:
-            rname, url = spec.split("=", 1)
-            entry = {"name": rname.strip(), "url": url.strip()}
-        else:
-            entry = {"name": derive(spec), "url": spec.strip()}
-        vals.setdefault("repos", []).append(entry)
+        url = url.strip()
+        rname = questionary.text(
+            "Name:", default=derive(url), qmark="?", style=style
+        ).ask()
+        if not rname or not rname.strip():
+            continue
+        vals.setdefault("repos", []).append({"name": rname.strip(), "url": url})
 
 
 def _wizard_key_step(console, total: int, key: str, fp: str) -> None:
@@ -1449,6 +1452,17 @@ def _edit_webhook(console, name: str) -> None:
 # --- Repo pool editor (design §11) ------------------------------------------
 
 
+_GH_PREFILL = "https://github.com/"
+
+
+def _migrate_legacy_repo(inst) -> None:
+    from .instances import _derive_repo_name
+
+    if inst.repo and not inst.repos:
+        inst.repos = [{"name": _derive_repo_name(inst.repo), "url": inst.repo}]
+        inst.repo = None
+
+
 def _edit_repos(console, name: str) -> None:
     import questionary
 
@@ -1459,19 +1473,20 @@ def _edit_repos(console, name: str) -> None:
         inst = instances.load(name)
         repos = inst.resolved_repos()
         _clear(console, "instances", name, "repositories")
-        _section(console, f"repository pool · {len(repos)}")
-        if repos:
-            for r in repos:
-                console.print(
-                    f"  [{CYAN}]•[/] [{BONE}]{r.name:<22}[/][{STONE}]{r.branch_base}[/]"
-                )
-        else:
-            console.print(f"  [{STONE}]empty pool.[/]")
+        console.print()
+        console.print(
+            _table(
+                ["repo", "url", "branch base"],
+                [(r.name, r.url, r.branch_base) for r in repos],
+                "empty pool — add a repository",
+            )
+        )
         act = _select(
             "Manage repositories",
             [
-                _action("add", "grant access to a repo"),
-                _action("remove", "revoke a repo"),
+                _action("add", "add a repository"),
+                _action("edit", "change a repository"),
+                _action("remove", "remove a repository"),
                 _sep(),
                 _back_choice(),
             ],
@@ -1479,28 +1494,78 @@ def _edit_repos(console, name: str) -> None:
         if act is None or act == _BACK:
             return
         if act == "add":
-            spec = questionary.text(
-                "Repository (name=url or url):", qmark="?", style=style
+            # URL comes prefilled with the GitHub base — continue typing or clear it.
+            url = questionary.text(
+                "Repository URL:", default=_GH_PREFILL, qmark="?", style=style
             ).ask()
-            if not spec:
+            if not url or url.strip() in ("", _GH_PREFILL):
                 continue
-            if "=" in spec:
-                rname, url = spec.split("=", 1)
-                entry = {"name": rname.strip(), "url": url.strip()}
-            else:
-                entry = {"name": _derive_repo_name(spec), "url": spec.strip()}
+            url = url.strip()
+            rname = questionary.text(
+                "Name:", default=_derive_repo_name(url), qmark="?", style=style
+            ).ask()
+            if not rname or not rname.strip():
+                continue
+            rname = rname.strip()
             branch = questionary.text(
                 "Default branch (empty = inherit):", qmark="?", style=style
             ).ask()
-            if branch:
-                entry["branch_base"] = branch
-            if entry["name"] in inst.repo_names():
-                console.print(f"[{RUST}]repo {entry['name']!r} already in the pool.[/]")
+            if rname in inst.repo_names():
+                console.print(f"[{RUST}]repo {rname!r} already in the pool.[/]")
+                _pause(console)
                 continue
-            if inst.repo and not inst.repos:  # migrate legacy single repo
-                inst.repos = [{"name": _derive_repo_name(inst.repo), "url": inst.repo}]
-                inst.repo = None
+            _migrate_legacy_repo(inst)
+            entry = {"name": rname, "url": url}
+            if branch and branch.strip():
+                entry["branch_base"] = branch.strip()
             inst.repos.append(entry)
+            _save_inst(console, inst)
+        elif act == "edit":
+            if not repos:
+                continue
+            target = _select(
+                "Edit which?", [r.name for r in repos] + [_sep(), _back_choice()]
+            )
+            if not target or target == _BACK:
+                continue
+            _migrate_legacy_repo(inst)
+            raw = next(
+                (r for r in inst.repos if (r.get("name") or _derive_repo_name(r["url"])) == target),
+                None,
+            )
+            if raw is None:
+                continue
+            new_url = questionary.text(
+                "Repository URL:", default=raw.get("url", ""), qmark="?", style=style
+            ).ask()
+            if new_url is None:
+                continue
+            new_name = questionary.text(
+                "Name:",
+                default=raw.get("name") or _derive_repo_name(raw["url"]),
+                qmark="?",
+                style=style,
+            ).ask()
+            if not new_name or not new_name.strip():
+                continue
+            new_name = new_name.strip()
+            new_branch = questionary.text(
+                "Default branch (empty = inherit):",
+                default=raw.get("branch_base", ""),
+                qmark="?",
+                style=style,
+            ).ask()
+            if new_name != target and new_name in inst.repo_names():
+                console.print(f"[{RUST}]repo {new_name!r} already in the pool.[/]")
+                _pause(console)
+                continue
+            entry = {"name": new_name, "url": (new_url.strip() or raw["url"])}
+            if new_branch and new_branch.strip():
+                entry["branch_base"] = new_branch.strip()
+            inst.repos = [
+                entry if (r.get("name") or _derive_repo_name(r["url"])) == target else r
+                for r in inst.repos
+            ]
             _save_inst(console, inst)
         elif act == "remove":
             if not repos:
