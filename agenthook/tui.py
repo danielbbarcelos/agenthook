@@ -34,17 +34,14 @@ STONE = "#6f6a5d"  # muted
 BONE = "#e8e3d8"  # foreground
 BORDER = "#45413a"  # subtle box border — darker than muted, just a hairline
 
-# Node mark (the webhook → agent chain), padded to vertically center against the
-# wordmark when shown side by side.
-_MARK = "\n●─╮\n  ╰─●─╮\n      ╰─●\n"
+# Node mark (the webhook → agent chain) — 3 rows, aligns with the wordmark.
+_MARK = "●─╮\n  ╰─●─╮\n      ╰─●"
 
-# "agenthook" in a compact ascii wordmark (FIGlet 'small').
+# "agenthook" as a compact shaded-block wordmark (FIGlet 'pagga') — 3 rows.
 _WORDMARK = (
-    "                   _   _             _\n"
-    " __ _ __ _ ___ _ _| |_| |_  ___  ___| |__\n"
-    "/ _` / _` / -_) ' \\  _| ' \\/ _ \\/ _ \\ / /\n"
-    "\\__,_\\__, \\___|_||_\\__|_||_\\___/\\___/_\\_\\\n"
-    "     |___/"
+    "░█▀█░█▀▀░█▀▀░█▀█░▀█▀░█░█░█▀█░█▀█░█░█\n"
+    "░█▀█░█░█░█▀▀░█░█░░█░░█▀█░█░█░█░█░█▀▄\n"
+    "░▀░▀░▀▀▀░▀▀▀░▀░▀░░▀░░▀░▀░▀▀▀░▀▀▀░▀░▀"
 )
 
 _MUTED = f"fg:{STONE}"
