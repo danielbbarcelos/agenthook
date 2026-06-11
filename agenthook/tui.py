@@ -311,10 +311,22 @@ def _crumb(console, *parts: str, right: str | None = None) -> None:
     console.print(line, highlight=False)
 
 
+def _hard_clear(console) -> None:
+    """A real clear, like the ``clear`` command: home the cursor, wipe the
+    visible screen *and* the scrollback (``ESC[3J``). Rich's ``console.clear()``
+    only does ``ESC[2J``/home, which leaves everything in the scrollback — so the
+    screen looks 'cleared' but scrolling up still shows the old pages."""
+    try:
+        console.file.write("\033[H\033[2J\033[3J")
+        console.file.flush()
+    except Exception:  # noqa: BLE001
+        console.clear()
+
+
 def _clear(console, *parts: str, right: str | None = None) -> None:
-    """Every screen change clears the terminal (no infinite scroll), redraws the
-    hero banner at the top, then anchors with the breadcrumb."""
-    console.clear()
+    """Every screen change truly clears the terminal (no infinite scroll),
+    redraws the hero banner at the top, then anchors with the breadcrumb."""
+    _hard_clear(console)
     _banner(console)
     if parts:
         console.print()
