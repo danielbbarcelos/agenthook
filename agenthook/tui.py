@@ -101,11 +101,16 @@ def _style():
     )
 
 
-def _back_choice(label: str = "back"):
-    """A muted '←' back/quit entry, always the last row, set apart from actions."""
+def _back_choice(label: str = "back", value: str | None = None):
+    """A muted '←' back/quit entry, always the last row, set apart from actions.
+    ``value`` defaults to ``label``; pass it explicitly when the visible text
+    differs from the sentinel the caller checks (e.g. label 'back to list',
+    value ``_BACK``)."""
     import questionary
 
-    return questionary.Choice(title=[(_MUTED, f"←  {label}")], value=label)
+    return questionary.Choice(
+        title=[(_MUTED, f"←  {label}")], value=label if value is None else value
+    )
 
 
 def _sep(label: str = ""):
@@ -413,6 +418,22 @@ def _inst_badge(inst) -> str:
     return f"[{SAGE}]● active[/]"
 
 
+def _inst_status_frag(inst) -> tuple[str, str]:
+    """Same status as ``_inst_badge`` but as a prompt_toolkit ``(style, text)``
+    fragment, for use inside ``_boxed_select`` rows (Rich markup would render
+    literally there)."""
+    if inst.paused:
+        return (f"fg:{STONE}", "⏸ paused")
+    try:
+        from . import engine_auth
+
+        if engine_auth.is_authenticated(inst) is False:
+            return (f"fg:{RUST}", "⚠ no auth")
+    except Exception:  # noqa: BLE001
+        pass
+    return (f"fg:{SAGE}", "● active")
+
+
 def _auth_badge(state) -> str:
     if state is True:
         return f"[{SAGE}]● logged in[/]"
@@ -709,61 +730,148 @@ def _serve(console) -> None:
 
 
 def _instances_menu(console) -> None:
+    """Instance-first navigation (list → detail). The list itself is selectable;
+    picking an instance opens a focused menu that stays open for several actions
+    without re-selecting. A lone instance is entered directly; with several, the
+    cursor lands on the most recently used one."""
     while True:
         names = instances.list_names()
-        has = bool(names)
-        _clear(console, "instances")
-        _show_instances(console)  # the list, right up front (design req)
-        if not has:
+        if not names:
+            _clear(console, "instances")
+            _show_instances(console)  # bordered empty-state
             console.print(
                 f"\n  [{RUST}]⚠ no instances yet — choose “add” to create your first.[/]"
             )
-        dis = None if has else "needs an instance"
+            choice = _select(
+                "instances",
+                choices=[
+                    _action("add", "register a new instance"),
+                    _sep(),
+                    _back_choice(),
+                ],
+            )
+            if choice == "add":
+                _instance_add(console)
+                continue  # a fresh single instance flows straight into its detail
+            return
+
+        ordered = _instances_by_recency(names)
+        if len(ordered) == 1:
+            # Lone instance: skip the list. Back from the detail exits to home —
+            # do NOT loop here, or there'd be no way out.
+            _instance_detail(console, ordered[0])
+            return
+
+        _clear(console, "instances")
+        rows = [_instance_row(n) for n in ordered]
         choice = _select(
-            "instances — pick an action",
-            choices=[
-                _sep("interact"),
-                _action("chat", "talk to the agent in a container", disabled=dis),
-                _action("shell", "open a bash shell in a container", disabled=dis),
+            "instances — pick one",
+            choices=rows
+            + [
                 _sep("manage"),
                 _action("add", "register a new instance"),
-                _action("view", "inspect config, repos, env & jobs", disabled=dis),
-                _action("edit", "change config or authentication", disabled=dis),
-                _action("remove", "delete an instance", disabled=dis),
                 _sep(),
                 _back_choice(),
             ],
         )
         if choice is None or choice == _BACK:
             return
-        if choice == "chat":
-            name = _pick_instance_or_none(console, "Chat with which instance?")
-            if name and name != _BACK:
-                tk = _pick_chat_thread(console, name)
-                if tk != _BACK:
-                    _clear(console, "chat", name)
-                    from . import chat
-
-                    chat.repl(name, thread_key=tk, console=console)
-        elif choice == "shell":
-            name = _pick_instance_or_none(console, "Open a shell for which instance?")
-            if name and name != _BACK:
-                _clear(console, "shell", name)
-                from . import shell as shell_mod
-
-                try:
-                    shell_mod.shell(name)
-                except Exception as exc:  # noqa: BLE001
-                    console.print(f"[{RUST}]error:[/] {exc}")
-                _pause(console)
-        elif choice == "add":
+        if choice == "add":
             _instance_add(console)
-        elif choice == "view":
-            _instance_view(console)
-        elif choice == "edit":
-            _instance_edit(console)
-        elif choice == "remove":
-            _instance_delete(console)
+            continue
+        _instance_detail(console, choice)  # choice is an instance name
+
+
+def _instances_by_recency(names: list[str]) -> list[str]:
+    """Most-recently-used instance first (by latest job or session), with the
+    untouched ones following in stable alphabetical order."""
+
+    def recency(n: str) -> float:
+        jobs = store.list_jobs(instance=n, limit=1)  # newest first
+        j_ts = jobs[0].created_at if jobs else 0
+        sess = store.list_sessions(instance=n)  # newest updated first
+        s_ts = sess[0].updated_at if sess else 0
+        return max(j_ts or 0, s_ts or 0)
+
+    return sorted(names, key=lambda n: (-recency(n), n))
+
+
+def _instance_row(name: str):
+    """One selectable summary line for the instance list. Kept cheap — no Docker
+    calls (disk_usage/is_built would make the list crawl)."""
+    import questionary
+
+    try:
+        inst = instances.load(name)
+        repos = inst.repo_names()
+        summary = f"{inst.engine} · {len(repos)} repo{'' if len(repos) == 1 else 's'}"
+        style, badge = _inst_status_frag(inst)
+    except Exception:  # noqa: BLE001 — a corrupt instance shouldn't break the list
+        summary, style, badge = "", _MUTED, ""
+    title = [("", f"{name:<18}"), (_MUTED, f"{summary:<18}"), (style, badge)]
+    return questionary.Choice(title=title, value=name)
+
+
+def _instance_detail(console, name: str) -> None:
+    """Focused menu for a single instance; loops so you can run several actions
+    without re-selecting. Returns to the list on back or after the instance is
+    removed."""
+    while True:
+        if not instances.exists(name):
+            return
+        inst = instances.load(name)
+        _clear(console, "instances", name)
+        console.print()
+        console.print(
+            f"  {_inst_badge(inst)}  [{AMBER} bold]{name}[/]"
+            f"   [{STONE}]{inst.engine} · {inst.deliverable}[/]"
+        )
+        act = _select(
+            f"{name} — pick an action",
+            choices=[
+                _sep("interact"),
+                _action("chat", "talk to the agent in a container"),
+                _action("shell", "open a bash shell in a container"),
+                _sep("history"),
+                _action("chats", "list & delete this instance's chats"),
+                _action("jobs", "list & delete this instance's jobs"),
+                _sep("manage"),
+                _action("view", "inspect config, repos, env & jobs"),
+                _action("edit", "change config or authentication"),
+                _action("remove", "delete this instance"),
+                _sep(),
+                _back_choice("back to list", value=_BACK),
+            ],
+        )
+        if act is None or act == _BACK:
+            return
+        if act == "chat":
+            tk = _pick_chat_thread(console, name)
+            if tk != _BACK:
+                _clear(console, "chat", name)
+                from . import chat
+
+                chat.repl(name, thread_key=tk, console=console)
+        elif act == "shell":
+            _clear(console, "shell", name)
+            from . import shell as shell_mod
+
+            try:
+                shell_mod.shell(name)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[{RUST}]error:[/] {exc}")
+            _pause(console)
+        elif act == "chats":
+            _sessions_menu(console, instance=name)
+        elif act == "jobs":
+            _jobs_menu(console, instance=name)
+        elif act == "view":
+            _instance_view(console, name)
+        elif act == "edit":
+            _instance_edit(console, name)
+        elif act == "remove":
+            if _instance_delete(console, name):
+                return  # instance gone → back to the list
 
 
 def _pause(console) -> None:
@@ -978,10 +1086,7 @@ def _wizard_key_step(console, total: int, key: str, fp: str) -> None:
 # --- View instance (design §07) ---------------------------------------------
 
 
-def _instance_view(console) -> None:
-    name = _pick_instance_or_none(console, "View which instance?")
-    if not name or name == _BACK:
-        return
+def _instance_view(console, name: str) -> None:
     inst = instances.load(name)
     _clear(console, "instances", name)
     console.print()
@@ -1078,25 +1183,22 @@ def _table(columns: list[str], rows: list, empty_msg: str):
 # --- Delete instance --------------------------------------------------------
 
 
-def _instance_delete(console) -> None:
-    name = _pick_instance_or_none(console, "Remove which instance?")
-    if not name or name == _BACK:
-        return
+def _instance_delete(console, name: str) -> bool:
+    """Confirm and delete. Returns True if the instance was removed (so the
+    caller can pop back to the list), False on cancel."""
     if not confirm(f"Delete {name!r} and its secrets? This is irreversible."):
         console.print(f"[{STONE}]cancelled.[/]")
-        return
+        return False
     instances.delete(name)
     console.print(f"[{SAGE}]✓ removed[/] {name}")
     _pause(console)
+    return True
 
 
 # --- Edit instance (design §08) ---------------------------------------------
 
 
-def _instance_edit(console) -> None:
-    name = _pick_instance_or_none(console, "Edit which instance?")
-    if not name or name == _BACK:
-        return
+def _instance_edit(console, name: str) -> None:
     while True:
         inst = instances.load(name)
         _clear(console, "instances", name, "edit")
@@ -1752,24 +1854,63 @@ def _show_instances(console) -> None:
 # --- Jobs (design §12 / §13) ------------------------------------------------
 
 
-def _jobs_menu(console) -> None:
+def _jobs_menu(console, instance: str | None = None) -> None:
     while True:
-        _clear(console, "jobs")
-        jobs = store.list_jobs(limit=20)
+        if instance:
+            _clear(console, "instances", instance, "jobs")
+        else:
+            _clear(console, "jobs")
+        jobs = store.list_jobs(instance=instance, limit=20)
         if not jobs:
             console.print(f"\n  [{RUST}]no jobs yet.[/]")
         header = f"{'ID':<14}{'INSTANCE':<14}{'STATUS':<20}{'DELIVERABLE':<10}AGE"
+        extras = [_sep(), _action("refresh", "reload the list")]
+        if jobs:
+            extras.append(
+                _action("delete jobs", "remove one or more jobs", value="__delete__")
+            )
         choice = _select(
             f"jobs · {len(jobs)} recent",
-            [_job_choice(j) for j in jobs]
-            + [_sep(), _action("refresh", "reload the list"), _back_choice()],
+            [_job_choice(j) for j in jobs] + extras + [_back_choice()],
             header=header,
         )
         if choice is None or choice == _BACK:
             return
         if choice == "refresh":
             continue
+        if choice == "__delete__":
+            _delete_jobs(console, jobs)
+            continue
         _job_view(console, choice)
+
+
+def _delete_jobs(console, jobs) -> None:
+    import questionary
+
+    print()
+    picked = questionary.checkbox(
+        "Select jobs to delete (space toggles, Enter confirms):",
+        choices=[
+            questionary.Choice(
+                title=f"{j.id:<14}  {j.instance}  ·  {j.status.value}  ·  "
+                f"{j.deliverable.value}  ·  {_ago(j.created_at)}",
+                value=j.id,
+            )
+            for j in jobs
+        ],
+        qmark="?",
+        style=_style(),
+    ).ask()
+    if not picked:
+        return
+    if not confirm(
+        f"Delete {len(picked)} job(s) and their logs? This is irreversible."
+    ):
+        console.print(f"[{STONE}]cancelled.[/]")
+        return
+    n = sum(1 for jid in picked if store.delete_job(jid))
+    console.print(f"[{SAGE}]✓ deleted {n} job(s).[/]")
+    _pause(console)
 
 
 def _job_view(console, job_id: str) -> None:
@@ -1813,6 +1954,7 @@ def _job_view(console, job_id: str) -> None:
     actions = [_action("logs", "show the full job log", value="logs")]
     if not job.status.terminal:
         actions.append(_action("cancel", "stop this job", value="cancel"))
+    actions.append(_action("delete", "delete this job & its log", value="delete"))
     actions += [_sep(), _back_choice()]
     act = _select("job", actions)
     if act == "logs":
@@ -1824,6 +1966,12 @@ def _job_view(console, job_id: str) -> None:
             store.save_job(job)
             console.print(f"[{CLAY}]cancel requested.[/]")
             _pause(console)
+    elif act == "delete":
+        if confirm(f"Delete job {job.id} and its log? This is irreversible."):
+            store.delete_job(job.id)
+            console.print(f"[{SAGE}]✓ deleted[/] {job.id}")
+            _pause(console)
+            return  # the job is gone — back to the jobs list
 
 
 def _step_rail(status: str) -> str:
@@ -1932,10 +2080,13 @@ def _approve_flow(console, job) -> None:
 # --- Sessions (design §14) --------------------------------------------------
 
 
-def _sessions_menu(console) -> None:
+def _sessions_menu(console, instance: str | None = None) -> None:
     while True:
-        _clear(console, "sessions")
-        sessions = store.list_sessions()
+        if instance:
+            _clear(console, "instances", instance, "chats")
+        else:
+            _clear(console, "sessions")
+        sessions = store.list_sessions(instance=instance)
         if not sessions:
             console.print(f"\n  [{RUST}]no sessions yet.[/]")
         import questionary

@@ -308,21 +308,62 @@ def set_session_description(session_id: str, description: str) -> None:
         )
 
 
+def _remove_job_log(instance: str, job_id: str) -> None:
+    """Best-effort delete of a job's on-disk log file."""
+    try:
+        p = paths.job_log(instance, job_id)
+        if p.exists():
+            p.unlink()
+    except OSError:
+        pass
+
+
+def delete_job(job_id: str) -> bool:
+    """Delete a single job: its row, its audit rows, and its log file. If the job
+    belongs to a chat, the session's ``job_count`` is recomputed. Returns True if
+    a job was removed."""
+    job = get_job(job_id)
+    if not job:
+        return False
+    with _lock, _conn() as conn:
+        conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        conn.execute("DELETE FROM audit WHERE job_id=?", (job_id,))
+        if job.session_id:
+            c = conn.execute(
+                "SELECT COUNT(*) c FROM jobs WHERE session_id=?", (job.session_id,)
+            ).fetchone()["c"]
+            conn.execute(
+                "UPDATE sessions SET job_count=?,updated_at=? WHERE id=?",
+                (c, time.time(), job.session_id),
+            )
+    _remove_job_log(job.instance, job_id)
+    return True
+
+
 def delete_session(session_id: str) -> int:
-    """Delete a chat: the session row, its jobs, and the persisted engine session
-    volume. Returns the number of jobs removed."""
+    """Delete a chat: the session row, its jobs (with their audit rows and log
+    files), and the persisted engine session volume. Returns the number of jobs
+    removed."""
     import shutil
 
     with _lock, _conn() as conn:
-        n = conn.execute(
-            "SELECT COUNT(*) c FROM jobs WHERE session_id=?", (session_id,)
-        ).fetchone()["c"]
+        rows = conn.execute(
+            "SELECT id, instance FROM jobs WHERE session_id=?", (session_id,)
+        ).fetchall()
+        job_rows = [(r["id"], r["instance"]) for r in rows]
+        # audit rows reference jobs by job_id — clear them while the jobs still exist
+        conn.execute(
+            "DELETE FROM audit WHERE job_id IN (SELECT id FROM jobs WHERE session_id=?)",
+            (session_id,),
+        )
         conn.execute("DELETE FROM jobs WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+    for jid, inst in job_rows:
+        _remove_job_log(inst, jid)
     vol = paths.sessions_dir() / session_id
     if vol.exists():
         shutil.rmtree(vol, ignore_errors=True)
-    return n
+    return len(job_rows)
 
 
 def get_session(session_id: str) -> Session | None:
