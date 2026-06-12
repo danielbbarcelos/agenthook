@@ -1891,24 +1891,28 @@ def _delete_jobs(console, jobs) -> None:
     picked = questionary.checkbox(
         "Select jobs to delete (space toggles, Enter confirms):",
         choices=[
-            questionary.Choice(
-                title=f"{j.id:<14}  {j.instance}  ·  {j.status.value}  ·  "
-                f"{j.deliverable.value}  ·  {_ago(j.created_at)}",
-                value=j.id,
-            )
-            for j in jobs
+            questionary.Choice(title=f"(all {len(jobs)} jobs)", value="__all__"),
+            *(
+                questionary.Choice(
+                    title=f"{j.id:<14}  {j.instance}  ·  {j.status.value}  ·  "
+                    f"{j.deliverable.value}  ·  {_ago(j.created_at)}",
+                    value=j.id,
+                )
+                for j in jobs
+            ),
         ],
         qmark="?",
         style=_style(),
     ).ask()
     if not picked:
         return
+    ids = [j.id for j in jobs] if "__all__" in picked else picked
     if not confirm(
-        f"Delete {len(picked)} job(s) and their logs? This is irreversible."
+        f"Delete {len(ids)} job(s) and their logs? This is irreversible."
     ):
         console.print(f"[{STONE}]cancelled.[/]")
         return
-    n = sum(1 for jid in picked if store.delete_job(jid))
+    n = sum(1 for jid in ids if store.delete_job(jid))
     console.print(f"[{SAGE}]✓ deleted {n} job(s).[/]")
     _pause(console)
 
@@ -2128,26 +2132,30 @@ def _delete_sessions(console, sessions) -> None:
     picked = questionary.checkbox(
         "Select chats to delete (space toggles, Enter confirms):",
         choices=[
-            questionary.Choice(
-                title=f"{(s.description or s.thread_key)[:24]:<24}  "
-                f"{s.instance}  ·  {s.job_count} msg  ·  {_ago(s.updated_at)}",
-                value=s.id,
-            )
-            for s in sessions
+            questionary.Choice(title=f"(all {len(sessions)} chats)", value="__all__"),
+            *(
+                questionary.Choice(
+                    title=f"{(s.description or s.thread_key)[:24]:<24}  "
+                    f"{s.instance}  ·  {s.job_count} msg  ·  {_ago(s.updated_at)}",
+                    value=s.id,
+                )
+                for s in sessions
+            ),
         ],
         qmark="?",
         style=_style(),
     ).ask()
     if not picked:
         return
+    ids = [s.id for s in sessions] if "__all__" in picked else picked
     if not confirm(
-        f"Delete {len(picked)} chat(s) and all their messages? This is irreversible."
+        f"Delete {len(ids)} chat(s) and all their messages? This is irreversible."
     ):
         console.print(f"[{STONE}]cancelled.[/]")
         return
-    total = sum(store.delete_session(sid) for sid in picked)
+    total = sum(store.delete_session(sid) for sid in ids)
     console.print(
-        f"[{SAGE}]✓ deleted {len(picked)} chat(s)[/] [{STONE}]({total} messages).[/]"
+        f"[{SAGE}]✓ deleted {len(ids)} chat(s)[/] [{STONE}]({total} messages).[/]"
     )
     _pause(console)
 
