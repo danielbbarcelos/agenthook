@@ -72,3 +72,9 @@ def auth_dir(instance: str) -> Path:
 
 def job_log(instance: str, job_id: str) -> Path:
     return logs_dir(instance) / f"{job_id}.log"
+
+
+def job_stream(instance: str, job_id: str) -> Path:
+    """Raw engine text deltas, appended live during the run — the source for
+    token streaming over SSE (``GET /jobs/{id}/stream``)."""
+    return logs_dir(instance) / f"{job_id}.stream"

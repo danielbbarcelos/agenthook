@@ -73,3 +73,23 @@ def test_session_routing(client):
 def test_payload_too_large(client):
     big = {"prompt": "x" * (513 * 1024)}
     assert client.post("/hook/api", json=big, headers=AUTH).status_code == 413
+
+
+def test_sse_stream_text_and_done(client):
+    from agenthook import paths
+    from agenthook.models import JobStatus
+
+    job_id = client.post("/hook/api", json={"prompt": "x"}, headers=AUTH).json()["job_id"]
+    paths.job_log("api", job_id).write_text("[10:00:00] preparing workspace\n")
+    paths.job_stream("api", job_id).write_text("Olá,\nmundo!")
+    job = store.get_job(job_id)
+    job.status = JobStatus.SUCCESS
+    store.save_job(job)
+
+    r = client.get(f"/jobs/{job_id}/stream")
+    assert r.headers["content-type"].startswith("text/event-stream")
+    body = r.text
+    assert "data: [10:00:00] preparing workspace\n\n" in body
+    # multi-line delta becomes one data: line per line, under event: text
+    assert "event: text\ndata: Olá,\ndata: mundo!\n\n" in body
+    assert body.endswith("event: done\ndata: success\n\n")

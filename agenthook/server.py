@@ -307,24 +307,53 @@ async def _wait_for(job_id: str, timeout: float) -> Job:
     return store.get_job(job_id)
 
 
+def _sse(event: str | None, payload: str) -> str:
+    """Format an SSE message; multi-line payloads become one data: line each
+    (EventSource rejoins them with newlines, preserving the text)."""
+    head = f"event: {event}\n" if event else ""
+    body = "".join(f"data: {ln}\n" for ln in payload.split("\n"))
+    return head + body + "\n"
+
+
 async def _log_stream(job_id: str):
+    """SSE feed for a job: runner progress lines as plain ``data:`` events
+    (back-compat) and live engine text deltas as ``event: text``, ending with
+    ``event: done``."""
     from . import paths
 
     job = store.get_job(job_id)
     if not job:
         return
-    path = paths.job_log(job.instance, job_id)
-    pos = 0
+    log_path = paths.job_log(job.instance, job_id)
+    text_path = paths.job_stream(job.instance, job_id)
+    log_pos = text_pos = 0
+
+    def drain() -> list[str]:
+        nonlocal log_pos, text_pos
+        out: list[str] = []
+        if log_path.exists():
+            with log_path.open() as fh:
+                fh.seek(log_pos)
+                out.extend(_sse(None, line.rstrip()) for line in fh)
+                log_pos = fh.tell()
+        if text_path.exists():
+            with text_path.open() as fh:
+                fh.seek(text_pos)
+                delta = fh.read()
+                text_pos = fh.tell()
+            if delta:
+                out.append(_sse("text", delta))
+        return out
+
     for _ in range(1200):  # ~10 min cap
-        if path.exists():
-            with path.open() as fh:
-                fh.seek(pos)
-                for line in fh:
-                    yield f"data: {line.rstrip()}\n\n"
-                pos = fh.tell()
+        # Check terminal *before* draining so the final read happens after the
+        # job stopped writing — otherwise last deltas could slip past us.
         job = store.get_job(job_id)
-        if job and job.status.terminal:
-            yield f"event: done\ndata: {job.status.value}\n\n"
+        done = job is not None and job.status.terminal
+        for msg in drain():
+            yield msg
+        if done:
+            yield _sse("done", job.status.value)
             return
         await asyncio.sleep(0.5)
 

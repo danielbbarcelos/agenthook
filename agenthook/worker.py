@@ -90,11 +90,19 @@ class Worker:
         return self._cfg.default_concurrency
 
     def _run(self, job_id: str) -> None:
+        from . import paths
+
         job = store.get_job(job_id)
         if job is None:
             return
+        stream_fh = paths.job_stream(job.instance, job.id).open("a")
+
+        def on_text(delta: str) -> None:
+            stream_fh.write(delta)
+            stream_fh.flush()
+
         try:
-            runner.run_job(job)
+            runner.run_job(job, on_text=on_text)
         except InstancePaused as exc:
             from .models import JobStatus
 
@@ -107,3 +115,5 @@ class Worker:
             job.status = JobStatus.ERROR
             job.error_message = str(exc)
             store.save_job(job)
+        finally:
+            stream_fh.close()

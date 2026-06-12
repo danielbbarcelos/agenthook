@@ -309,13 +309,13 @@ def set_session_description(session_id: str, description: str) -> None:
 
 
 def _remove_job_log(instance: str, job_id: str) -> None:
-    """Best-effort delete of a job's on-disk log file."""
-    try:
-        p = paths.job_log(instance, job_id)
-        if p.exists():
-            p.unlink()
-    except OSError:
-        pass
+    """Best-effort delete of a job's on-disk log and stream files."""
+    for p in (paths.job_log(instance, job_id), paths.job_stream(instance, job_id)):
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError:
+            pass
 
 
 def delete_job(job_id: str) -> bool:
