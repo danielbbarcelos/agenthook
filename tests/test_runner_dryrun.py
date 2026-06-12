@@ -37,3 +37,23 @@ def test_dry_run_renders_without_executing():
     assert out["mcp"]["mcpServers"]["pg"]["env"]["URL"] == "***"
     assert out["guardrails"]["read_only"] is True
     assert out["auth_env_required"] == ["ANTHROPIC_API_KEY"]
+    # the operator guardrail rides along on every run
+    i = out["argv"].index("--append-system-prompt")
+    assert out["argv"][i + 1] == runner._AGENT_GUARDRAIL
+
+
+def test_agent_guardrail_covers_all_sections():
+    """The guardrail is assembled from four parts — confidentiality, anti-exfil,
+    database safety, injection resistance. Guard against one being dropped."""
+    g = runner._AGENT_GUARDRAIL
+    for part in (
+        runner._GUARDRAIL_CONFIDENTIALITY,
+        runner._GUARDRAIL_ANTI_EXFIL,
+        runner._GUARDRAIL_DATA_SAFETY,
+        runner._GUARDRAIL_INJECTION,
+    ):
+        assert part and part in g
+    assert "DATABASE SAFETY" in g
+    assert "WHERE" in g  # mass-destructive SQL rule
+    assert "base64" in g  # derived-disclosure rule
+    assert "commit messages" in g  # exfil-via-deliverable rule
