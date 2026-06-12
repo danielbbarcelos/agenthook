@@ -52,6 +52,8 @@ class ClaudeEngine(Engine):
             argv += ["--disallowedTools", ",".join(spec.disallowed_tools)]
         if spec.resume_session_id:
             argv += ["--resume", spec.resume_session_id]
+        if spec.system_prompt_append:
+            argv += ["--append-system-prompt", spec.system_prompt_append]
         argv += spec.extra_args
         return argv
 

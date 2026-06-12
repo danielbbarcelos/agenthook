@@ -31,6 +31,19 @@ def test_claude_argv_disallows_tools():
     assert "Edit,Write" in argv
 
 
+def test_claude_argv_appends_system_prompt():
+    eng = get_engine("claude")
+    argv = eng.build_argv(RunSpec(prompt="x", system_prompt_append="GUARD"))
+    assert "--append-system-prompt" in argv
+    assert argv[argv.index("--append-system-prompt") + 1] == "GUARD"
+
+
+def test_claude_argv_omits_system_prompt_when_empty():
+    eng = get_engine("claude")
+    argv = eng.build_argv(RunSpec(prompt="x"))
+    assert "--append-system-prompt" not in argv
+
+
 def test_claude_parse_stream_json():
     eng = get_engine("claude")
     out = "\n".join(

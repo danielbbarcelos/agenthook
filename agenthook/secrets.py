@@ -193,7 +193,21 @@ def fingerprint(key: bytes) -> str:
     return hashlib.sha256(key).hexdigest()[:16]
 
 
+# agenthook's own control-plane secrets live in env.enc under this reserved
+# namespace (e.g. webhook auth headers, AGENTHOOK_HEADER_*). They are read by
+# agenthook itself (auth.py) but must NEVER be injected into the agent's runtime.
+RESERVED_PREFIX = "AGENTHOOK_"
+
+
+def is_agent_visible(name: str) -> bool:
+    """False for control-plane secrets that must never reach the agent runtime
+    (the reserved AGENTHOOK_* namespace)."""
+    return not name.upper().startswith(RESERVED_PREFIX)
+
+
 def resolve_env(inst: Instance) -> dict[str, str]:
-    """Return all env vars (decrypted, real values) for runtime injection."""
+    """Env vars (decrypted, real values) injected into the agent's runtime.
+    Excludes the reserved AGENTHOOK_* control-plane namespace (e.g. webhook auth
+    secrets), which the agent must never see."""
     backend = get_backend(inst)
-    return {ev.name: ev.value for ev in backend.items(inst)}
+    return {ev.name: ev.value for ev in backend.items(inst) if is_agent_visible(ev.name)}

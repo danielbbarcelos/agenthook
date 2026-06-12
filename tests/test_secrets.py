@@ -42,6 +42,34 @@ def test_resolve_env_returns_real_values(instance):
     assert secrets.resolve_env(instance) == {"X": "1", "Y": "2"}
 
 
+def test_is_agent_visible_reserved_prefix():
+    # agenthook's own control-plane namespace is hidden from the agent runtime
+    assert secrets.is_agent_visible("AGENTHOOK_HEADER_X_API_KEY") is False
+    assert secrets.is_agent_visible("agenthook_anything") is False
+    # tool credentials the agent needs stay visible
+    assert secrets.is_agent_visible("GH_TOKEN") is True
+    assert secrets.is_agent_visible("DB_PRODUCTION_HOST") is True
+
+
+def test_resolve_env_excludes_control_plane_secrets(instance):
+    b = secrets.get_backend(instance)
+    b.set(instance, "GH_TOKEN", "ghp_real", secret=True)
+    b.set(instance, "AGENTHOOK_HEADER_X_API_KEY", "webhook-secret", secret=True)
+    env = secrets.resolve_env(instance)
+    assert env == {"GH_TOKEN": "ghp_real"}  # webhook auth secret never reaches the agent
+    # but it is still retrievable for agenthook's own webhook auth
+    assert b.get(instance, "AGENTHOOK_HEADER_X_API_KEY") == "webhook-secret"
+
+
+def test_nonsecret_env_excludes_control_plane(instance):
+    from agenthook.runner import _nonsecret_env
+
+    b = secrets.get_backend(instance)
+    b.set(instance, "LOG_LEVEL", "debug", secret=False)
+    b.set(instance, "AGENTHOOK_FLAG", "x", secret=False)
+    assert _nonsecret_env(instance) == {"LOG_LEVEL": "debug"}
+
+
 def test_env_backend_reads_process_env(monkeypatch):
     inst = Instance(name="envinst", secrets_backend="env")
     save(inst)

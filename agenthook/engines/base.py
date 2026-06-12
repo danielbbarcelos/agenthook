@@ -42,6 +42,7 @@ class RunSpec:
     stream: bool = False  # ask the engine to emit partial output for live streaming
     resume_session_id: str | None = None
     sandbox: bool = True  # running inside an isolated container
+    system_prompt_append: str = ""  # operator guardrail appended to the engine's system prompt
     extra_args: list[str] = field(default_factory=list)
 
 
