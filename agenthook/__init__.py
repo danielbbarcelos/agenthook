@@ -5,4 +5,4 @@ most functionality is reached through the CLI (`agenthook.cli`) and the HTTP
 server (`agenthook.server`).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

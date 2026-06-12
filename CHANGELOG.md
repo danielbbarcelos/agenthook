@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.1.1
+
+### TUI / UX
+- **Instance-first navigation** — the instances list is selectable; picking one opens a
+  focused detail menu that stays open for several actions without re-selecting. A lone
+  instance is entered directly, and the list is ordered by recency so the most-used floats
+  to the top.
+- **Delete jobs** (new) — single from the job view, multiple via a checkbox picker, in the
+  global `jobs` menu and scoped inside an instance. `delete_job` also clears the job's audit
+  rows and log file; `delete_session` now cleans its jobs' audit/logs too (no orphans).
+- **Per-instance history** — jobs and chats are listed and deletable under a "history" group
+  in the instance detail menu.
+- Fixed the instance "back to list" entry doing nothing (only Ctrl+C worked).
+
+### Security
+- **Control-plane secrets never reach the agent** — the reserved `AGENTHOOK_*` namespace
+  (e.g. webhook auth headers) is excluded from the env injected into the container.
+- **Operator guardrail** (system prompt, on by default, every run): forbids disclosing or
+  exfiltrating configuration, secrets, credentials, authenticated identities, token scopes,
+  and connected integrations; resists prompt-injection (including embedded/"I am the
+  operator" attempts); and blocks mass-destructive database ops (DELETE/UPDATE without WHERE,
+  DROP DATABASE, TRUNCATE) and dumps/bulk exports — while allowing normal tool use and
+  bounded, explicitly-requested changes. Validated with a 13-case live red-team.
+
 ## v0.1.0 — first release
 
 First public release of **agenthook**: a self-hosted CLI that runs agentic coding
