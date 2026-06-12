@@ -661,18 +661,40 @@ def main_menu() -> None:
 def _serve(console) -> None:
     import questionary
 
+    from . import daemon
     from .config import load_config, save_config
 
     while True:
         cfg = load_config()
+        pid = daemon.running_pid()
+        external = pid is None and daemon.port_open(cfg.host, cfg.port)
         _clear(console, "serve")
+        if pid:
+            state = f"[{SAGE}]● up[/] [{STONE}]· pid {pid} · background[/]"
+        elif external:
+            state = f"[{SAGE}]● up[/] [{STONE}]· not managed here (systemd/foreground?)[/]"
+        else:
+            state = f"[{STONE}]○ down[/]"
         console.print(
-            f"\n  [{BONE}]webhook server[/]   [{AMBER}]http://{cfg.host}:{cfg.port}[/]\n"
+            f"\n  [{BONE}]webhook server[/]   [{AMBER}]http://{cfg.host}:{cfg.port}[/]   {state}\n"
         )
+        if pid:
+            actions = [
+                _action("stop", "terminate the background server"),
+                _action("restart", "stop, then start again in background"),
+                _action("logs", "follow server.log (Ctrl+C to return)"),
+            ]
+        else:
+            actions = [
+                _action("start", "run in background (keeps the TUI free)"),
+                _action("start attached", "run here in the terminal (Ctrl+C to stop)", value="start attached"),
+            ]
+            if daemon.log_file().exists():
+                actions.append(_action("logs", "follow server.log (Ctrl+C to return)"))
         act = _select(
             "serve",
             [
-                _action("start", "run the server (Ctrl+C to stop)"),
+                *actions,
                 _action("set port", f"current: {cfg.port}", value="set port"),
                 _action("set host", f"current: {cfg.host}", value="set host"),
                 _sep(),
@@ -704,7 +726,35 @@ def _serve(console) -> None:
                 save_config(cfg)
                 console.print(f"[{SAGE}]✓ host = {cfg.host}[/]")
             _pause(console)
-        elif act == "start":
+        elif act in ("start", "restart"):
+            try:
+                if act == "restart":
+                    daemon.stop()
+                new_pid = daemon.start(cfg.host, cfg.port)
+                console.print(
+                    f"[{SAGE}]✓ server up[/] [{STONE}]·[/] "
+                    f"[{AMBER}]http://{cfg.host}:{cfg.port}[/] [{STONE}]· pid {new_pid}[/]"
+                )
+            except RuntimeError as exc:
+                console.print(f"[{RUST}]error:[/] {exc}")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[{RUST}]error:[/] {exc}")
+            _pause(console)
+        elif act == "stop":
+            if daemon.stop():
+                console.print(f"[{SAGE}]✓ server stopped.[/]")
+            else:
+                console.print(f"[{STONE}]server was not running.[/]")
+            _pause(console)
+        elif act == "logs":
+            import subprocess
+
+            console.print(f"[{STONE}]following {daemon.log_file()} — Ctrl+C to return[/]\n")
+            try:
+                subprocess.run(["tail", "-n", "40", "-f", str(daemon.log_file())])
+            except KeyboardInterrupt:
+                pass
+        elif act == "start attached":
             try:
                 import uvicorn
 

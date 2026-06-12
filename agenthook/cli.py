@@ -328,8 +328,46 @@ def apply_cmd(
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8080, "--port"),
+    background: bool = typer.Option(False, "--background", "-d", help="run detached (pidfile + log)"),
+    stop: bool = typer.Option(False, "--stop", help="stop the background server"),
+    status: bool = typer.Option(False, "--status", help="show background server status"),
+    logs: bool = typer.Option(False, "--logs", help="tail the background server log"),
 ):
     """Run the webhook server (embedded uvicorn — no Apache/nginx needed)."""
+    from . import daemon
+
+    if stop:
+        if daemon.stop():
+            console.print("[green]server stopped.[/]")
+        else:
+            console.print("server is not running.")
+        return
+    if status:
+        pid = daemon.running_pid()
+        if pid:
+            console.print(f"[green]● up[/] pid {pid} · log: {daemon.log_file()}")
+        else:
+            console.print("○ down")
+        return
+    if logs:
+        import subprocess
+
+        try:
+            subprocess.run(["tail", "-n", "50", "-f", str(daemon.log_file())])
+        except KeyboardInterrupt:
+            pass
+        return
+    if background:
+        try:
+            pid = daemon.start(host, port)
+        except RuntimeError as exc:
+            _err(str(exc))
+        console.print(
+            f"[green]agenthook[/] serving on http://{host}:{port} (pid {pid})\n"
+            f"log: {daemon.log_file()} · stop with: agenthook serve --stop"
+        )
+        return
+
     import uvicorn
 
     store.init_db()
