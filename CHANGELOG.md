@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.1.0-beta
+
+Beta release. Builds on v1.0.0 with live streaming and an interactive chat surface.
+
+### Streaming
+- **Live engine token streaming** — the server emits engine output as `event: text`
+  SSE deltas on `GET /jobs/<id>/stream` (runner progress lines stay as plain `data:`
+  events for back-compat; the feed ends with `event: done`). The same deltas drive the
+  chat REPL and the TUI, so a job can be watched thinking in real time.
+
+### Chat / shell
+- **`agenthook enter`** — multi-turn chat REPL against an instance: per-turn token
+  streaming, a live elapsed timer, real Ctrl+C cancel (kills the container), ↑/↓ input
+  history seeded from the thread, and resume of a previous conversation via `--thread-key`.
+  Slash commands `/new`, `/note`, `/repos`, `/deliverable`, `/help`, `/exit`.
+- **`agenthook shell`** — interactive shell inside the instance's isolated sandbox.
+- **`agenthook login`** — log a subscription account into the instance's own auth dir
+  (the host's `~/.claude` is never used).
+
+### Server / daemon
+- **Background daemon** — `agenthook serve -d` runs the webhook server detached
+  (pidfile + log), with `--stop`, `--status`, and `--logs`.
+
+### TUI
+- Select-all option when deleting jobs/chats, alongside single and multi-select.
+
 ## v0.1.1
 
 ### TUI / UX

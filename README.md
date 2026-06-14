@@ -19,6 +19,19 @@ The full design and rationale live in [`DESIGN.md`](./DESIGN.md) (32 sections).
 - **Encrypted secrets** per instance (immutable Fernet key), pluggable secret backends.
 - **Verification loop** (self-heal) gating PRs on your tests/lint, with cost & iteration caps.
 - **Human-in-the-loop** plan approval via signed URLs + a Slack reference connector.
+- **Live token streaming** — engine output streams over SSE (`event: text`) to the HTTP
+  stream, the chat REPL, and the TUI, so you watch a job think in real time.
+- **Interactive chat** (`agenthook enter`) — a multi-turn REPL against an instance, with
+  per-turn streaming, a live elapsed timer, real Ctrl+C cancel, ↑/↓ input history, and
+  resume of a previous conversation by `thread_key`.
+- **Isolated shell & login** — drop into the instance's sandbox container (`shell`) or log a
+  subscription account into the instance's **own** auth dir (`login`); the host's `~/.claude`
+  is never touched.
+- **Background daemon** — `serve -d` runs the webhook server detached (pidfile + log), with
+  `--stop`, `--status`, and `--logs`; or generate a systemd unit with `install-service`.
+- **Operator guardrail** (on by default, every run) — a system prompt that refuses to leak
+  config/secrets/credentials/identities, resists prompt-injection, and blocks mass-destructive
+  database ops (DELETE/UPDATE without WHERE, DROP, TRUNCATE) and bulk dumps.
 - **Usage/cost auditing**, a normalized **error taxonomy** with a per-instance **circuit breaker**,
   durable **delivery guarantees** (persist-before-ack, idempotency, at-least-once callbacks).
 
@@ -50,6 +63,17 @@ agenthook dry-run bugbot --prompt "fix the pagination bug" --deliverable pr
 
 # 5) Serve the webhook (embedded server — no Apache/nginx needed).
 agenthook serve --host 0.0.0.0 --port 8080
+# …or run it detached and manage it:
+agenthook serve -d --host 0.0.0.0 --port 8080   # background (pidfile + log)
+agenthook serve --status                        # ● up pid … / ○ down
+agenthook serve --logs                           # tail the daemon log
+agenthook serve --stop
+```
+
+Follow a job's output live (runner progress + engine text deltas as it streams):
+
+```bash
+curl -N http://localhost:8080/jobs/j_…/stream
 ```
 
 Trigger it from your app:
@@ -82,6 +106,27 @@ so a ticket's whole back-and-forth stays in one conversation.
 | `commit`    | pushes a branch | branch |
 | `pr`        | pushes + opens a PR | PR URL |
 
+## Interactive chat, shell & login
+
+```bash
+# Multi-turn chat against an instance (streams tokens; ↑/↓ history; Ctrl+C cancels).
+agenthook enter bugbot                          # read-only analysis by default
+agenthook enter bugbot --thread-key ticket-123  # resume an existing conversation
+agenthook enter bugbot --repos app --deliverable pr
+```
+
+Inside the chat, slash commands switch context without leaving:
+`/new` (fresh thread), `/note TEXT` (label the chat in `sessions`),
+`/repos a,b`, `/deliverable <name>`, `/help`, `/exit`.
+
+```bash
+# A shell INSIDE the instance's isolated sandbox (repos at /workspace).
+agenthook shell bugbot
+
+# Log a subscription account into the instance's OWN auth dir (never ~/.claude).
+agenthook login bugbot      # run /login inside, then exit
+```
+
 ## Declarative config (GitOps)
 
 ```bash
@@ -91,18 +136,24 @@ agenthook apply -f examples/agenthook.yaml      # reconcile instances; secrets s
 ## Selected commands
 
 ```
-agenthook instance add|list|show|rm|resume      env set|get|list|rm
-agenthook context|auth|template|mcp|verify       apply   serve   install-service
-agenthook run | dry-run | send [--replay]        jobs list|show   sessions list   logs -f
+agenthook instance add|list|show|rm|resume      env set|get|list|rm   repo add|rm|list
+agenthook context|auth|template|mcp|verify       apply
+agenthook serve [-d|--stop|--status|--logs]      install-service   service start|stop|status|logs
+agenthook run | dry-run | send [--replay]        enter   shell   login
+agenthook jobs list|show     sessions list       logs -f
 agenthook usage | audit [--export csv|json]
 ```
+
+The bare `agenthook` command (no subcommand) opens the **guided TUI** — an arrow-key menu
+over the same flows, with instance-first navigation, a job runner with inline plan approval,
+session/chat history, and bulk delete (single, multi, or select-all).
 
 ## Development
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q          # 35 tests, no Docker / no real engine needed
+pytest -q          # 56 tests, no Docker / no real engine needed
 ruff check agenthook tests
 ```
 
