@@ -847,3 +847,27 @@ global explícita (`allow_guardrail_relaxation`), fora do escopo atual.
 entregues no workspace em `<engine.skills_dir>/<name>/SKILL.md` (Claude Code: `.claude/skills`)
 no mesmo ponto onde CLAUDE.md e `.mcp.json` são materializados. Engines anunciam suporte via
 `capabilities.skills` + `Engine.skills_dir`.
+
+## 34. Painel web (React + shadcn/ui)
+
+Um SPA em `web/` consome a Management API (§33) como alternativa de UI ao CLI/`curl`.
+Stack: Vite + React + TypeScript + Tailwind + shadcn/ui + TanStack Query + React Router +
+CodeMirror. **Herda a identidade do design-system** (paleta âmbar sobre near-black, JetBrains
+Mono e o vocabulário de status glyph+cor de `agenthook/tui.py` — o `StatusBadge` replica o
+mapeamento exato).
+
+**Integração.** Em dev, o Vite proxia `/admin`/`/jobs`/`/healthz` para o backend (mesma origem,
+sem CORS). Em produção, `npm run build` emite para `agenthook/static/panel/` e o FastAPI
+(`server.py:_mount_panel`) serve o build em **`/ui`** quando presente — mesma origem do `/admin`,
+montado depois das rotas de API (que têm precedência). O artefato é gitignorado e incluído no
+wheel via `[tool.hatch.build.targets.wheel] artifacts`.
+
+**Auth.** Tela de login cola o admin token (§33), guardado em `sessionStorage` e enviado como
+`Authorization: Bearer`. O gate loopback exige rodar em localhost; o login orienta sobre
+`admin_remote` para acesso remoto. O stream ao vivo de jobs usa `EventSource` direto em
+`/jobs/{id}/stream` (endpoint público — `EventSource` não envia headers).
+
+**Cobertura.** Dashboard; Instances (CRUD + abas config/repos/env/auth/verify/mcp/CLAUDE.md/
+guardrails/skills, com a modal de chave única na criação e a UI de guardrails reforçando o
+modelo append-only); Jobs + viewer de stream; Sessions; Usage/Audit; Config global (segredos
+mascarados). *Templates por-request_type* ficam como follow-up.

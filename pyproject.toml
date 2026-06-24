@@ -47,6 +47,10 @@ env = "agenthook.secrets:EnvBackend"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agenthook"]
+# The web panel build (produced by web/ into agenthook/static/panel) is a build
+# artifact, gitignored but shipped in the wheel so `agenthook serve` can serve
+# it at /ui without a separate build step for end users.
+artifacts = ["agenthook/static/panel/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

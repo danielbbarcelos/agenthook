@@ -26,6 +26,12 @@ htmlcov/
 *.db
 *.sqlite3
 
+# Web panel (web/) — node deps and build output (built into the package dir)
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+agenthook/static/panel/
+
 # OS / editor
 .DS_Store
 *.swp

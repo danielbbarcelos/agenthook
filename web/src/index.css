@@ -1,0 +1,47 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design-system palette translated to shadcn HSL tokens (dark only — warm
+   near-black earth with amber as brand). Source: design-system/README.md. */
+@layer base {
+  :root {
+    --background: 50 17% 7%; /* #15140f */
+    --foreground: 41 26% 88%; /* #e8e3d8 bone */
+
+    --card: 44 19% 11%; /* #221f17 bar */
+    --card-foreground: 41 26% 88%;
+    --popover: 44 19% 11%;
+    --popover-foreground: 41 26% 88%;
+
+    --primary: 39 67% 55%; /* #d9a441 amber */
+    --primary-foreground: 48 19% 6%;
+
+    --secondary: 44 17% 15%;
+    --secondary-foreground: 41 26% 88%;
+
+    --muted: 44 17% 15%;
+    --muted-foreground: 43 12% 58%; /* stone, lightened for contrast */
+
+    --accent: 44 17% 18%;
+    --accent-foreground: 41 26% 88%;
+
+    --destructive: 354 42% 56%; /* #bf616a rust */
+    --destructive-foreground: 41 26% 95%;
+
+    --border: 38 9% 25%; /* #45413a */
+    --input: 38 9% 25%;
+    --ring: 39 67% 55%; /* amber */
+
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-mono antialiased;
+  }
+}

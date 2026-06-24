@@ -198,6 +198,22 @@ curl "${A[@]}" -X PUT localhost:8080/admin/instances/bugbot/guardrails \
 The same new fields are also on the CLI: `agenthook guardrails NAME [--extra … | --file F]
 [--force-read-only]` and `agenthook skill add|rm|list NAME …`.
 
+## Web panel
+
+A React + shadcn/ui dashboard ships in [`web/`](./web) for those who'd rather click than curl.
+It drives the same `/admin/*` API (instance CRUD & config, env, guardrails, skills, global
+config, jobs/sessions/usage/audit) with **live job streaming**, and inherits the project's
+amber-on-near-black design language. Built, it's served by `agenthook serve` at `/ui`
+(same origin as `/admin` — no CORS); paste the admin token to sign in.
+
+```bash
+cd web && npm install && npm run build   # -> served at http://127.0.0.1:8080/ui
+# or develop with hot reload (proxies the API): npm run dev   # http://localhost:5180/ui
+```
+
+See [`web/README.md`](./web/README.md) for details. The panel must run on localhost (the admin
+API is loopback-only unless `admin_remote: true`).
+
 ## Development
 
 ```bash

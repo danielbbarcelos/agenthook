@@ -48,6 +48,9 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
 
+    # ---- web panel (built SPA, served at /ui if present) ----------------
+    _mount_panel(app)
+
     # ---- infra ----------------------------------------------------------
 
     @app.get("/healthz")
@@ -124,6 +127,24 @@ def create_app() -> FastAPI:
         return _decide(app, job_id, "reject", token)
 
     return app
+
+
+def _mount_panel(app: FastAPI) -> None:
+    """Serve the built React panel at ``/ui`` when present.
+
+    The build is produced by ``web/`` into ``agenthook/static/panel`` (inside the
+    package, so it ships in the wheel). Mounting at ``/ui`` keeps it same-origin
+    with ``/admin`` — no CORS — while leaving the API routes (registered above)
+    untouched, since those take precedence over the mount. ``html=True`` lets the
+    SPA's hash routes resolve to ``index.html``.
+    """
+    from pathlib import Path
+
+    panel = Path(__file__).parent / "static" / "panel"
+    if (panel / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/ui", StaticFiles(directory=str(panel), html=True), name="panel")
 
 
 # --- request handling -------------------------------------------------------
