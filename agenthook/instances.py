@@ -66,6 +66,8 @@ class Instance:
     secrets_backend: str = "local-encrypted"  # §27
     context_template: str | None = None  # §13 (inline template body)
     templates: dict[str, str] = field(default_factory=dict)  # §14, request_type -> body
+    guardrails: dict[str, Any] = field(default_factory=dict)  # append-only over the global baseline
+    skills: dict[str, str] = field(default_factory=dict)  # name -> SKILL.md body
     paused: bool = False  # circuit breaker (§17)
     paused_reason: str | None = None
     key_fingerprint: str | None = None
@@ -96,6 +98,32 @@ class Instance:
             if rname in seen:
                 raise InstanceError(f"duplicate repo name {rname!r}")
             seen.add(rname)
+        self._validate_guardrails()
+        for sname in self.skills:
+            if not _NAME_RE.match(sname):
+                raise InstanceError(f"invalid skill name {sname!r}")
+
+    # Guardrails are append-only / hardening-only: the global baseline is an
+    # inviolable floor. An instance may *add* rules or *harden*, never disable a
+    # safety block — so only this closed set of keys is allowed.
+    _GUARDRAIL_KEYS = {"extra", "force_read_only"}
+
+    def _validate_guardrails(self) -> None:
+        g = self.guardrails
+        if not g:
+            return
+        if not isinstance(g, dict):
+            raise InstanceError("guardrails must be a mapping")
+        unknown = set(g) - self._GUARDRAIL_KEYS
+        if unknown:
+            raise InstanceError(
+                f"unknown guardrails key(s) {sorted(unknown)} — guardrails are "
+                f"append-only; allowed: {sorted(self._GUARDRAIL_KEYS)}"
+            )
+        if "extra" in g and not isinstance(g["extra"], str):
+            raise InstanceError("guardrails.extra must be a string")
+        if "force_read_only" in g and not isinstance(g["force_read_only"], bool):
+            raise InstanceError("guardrails.force_read_only must be a boolean")
 
     @property
     def default_mode(self) -> str:

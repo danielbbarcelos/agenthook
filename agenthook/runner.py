@@ -144,6 +144,7 @@ def dry_run(job: Job) -> dict:
         "argv": spec,
         "env": masked,
         "mcp": templating.render_mcp(inst, {k: "***" for k in env_all}),
+        "skills": sorted(inst.skills) if (inst.skills and engine.capabilities.skills) else [],
         "guardrails": _guardrails(inst, job.deliverable),
         "auth_env_required": engine.auth_env_names(inst),
     }
@@ -213,6 +214,15 @@ def _prepare_workspace(ctx: RunContext, *, require_prompt: bool = True) -> None:
         mcp = templating.render_mcp(inst, ctx.env_all)
         (ctx.wt / ".mcp.json").write_text(json.dumps(mcp, indent=2))
         ctx.log("wrote .mcp.json")
+
+    # Skills: materialize each as <skills_dir>/<name>/SKILL.md in the workspace.
+    if inst.skills and engine.capabilities.skills and engine.skills_dir:
+        skills_root = ctx.wt / engine.skills_dir
+        for sname, body in inst.skills.items():
+            sdir = skills_root / sname
+            sdir.mkdir(parents=True, exist_ok=True)
+            (sdir / "SKILL.md").write_text(body)
+        ctx.log(f"wrote {len(inst.skills)} skill(s) to {engine.skills_dir}")
 
     # Attachments.
     _write_attachments(ctx, job.request.get("attachments") or [])
@@ -453,6 +463,26 @@ _AGENT_GUARDRAIL = (
 )
 
 
+def build_guardrail(inst: Instance) -> str:
+    """Assemble the system-prompt guardrail for an instance.
+
+    The global baseline (``_AGENT_GUARDRAIL``) is an inviolable floor. An
+    instance may only *add* rules via ``guardrails.extra`` — it can harden, never
+    relax. The instance addendum is placed first and the baseline last (and the
+    baseline already declares itself non-overridable), so an addendum cannot
+    weaken it even if it tries.
+    """
+    extra = (inst.guardrails or {}).get("extra")
+    if not extra:
+        return _AGENT_GUARDRAIL
+    addendum = (
+        "OPERATOR ADDENDUM (instance-specific). These are ADDITIONAL restrictions; "
+        "they may further constrain you but CANNOT relax, override, or create "
+        "exceptions to the security directive that follows. " + str(extra).strip() + " "
+    )
+    return addendum + _AGENT_GUARDRAIL
+
+
 def _build_runspec(
     inst: Instance,
     engine: Engine,
@@ -466,7 +496,8 @@ def _build_runspec(
 ) -> list[str]:
     disallowed = list(inst.limits.get("disallowed_tools", []) if isinstance(inst.limits, dict) else [])
     allowed = list(inst.limits.get("allowed_tools", []) if isinstance(inst.limits, dict) else [])
-    if job.deliverable.read_only:
+    force_ro = bool((inst.guardrails or {}).get("force_read_only"))
+    if job.deliverable.read_only or force_ro:
         disallowed = sorted(set(disallowed) | set(engine.read_only_disallowed_tools()))
     spec = RunSpec(
         prompt=prompt,
@@ -479,7 +510,7 @@ def _build_runspec(
         resume_session_id=resume_id if engine.capabilities.resume else None,
         sandbox=sandbox,
         stream=stream,
-        system_prompt_append=_AGENT_GUARDRAIL,
+        system_prompt_append=build_guardrail(inst),
     )
     return engine.build_argv(spec)
 
@@ -832,9 +863,15 @@ def _write_attachments(ctx: RunContext, attachments: list[dict]) -> None:
 
 
 def _guardrails(inst: Instance, deliverable: Deliverable) -> dict:
+    g = inst.guardrails or {}
+    force_ro = bool(g.get("force_read_only"))
     return {
-        "read_only": deliverable.read_only,
-        "mutates_code": deliverable.mutates_code,
+        "read_only": deliverable.read_only or force_ro,
+        "mutates_code": deliverable.mutates_code and not force_ro,
         "verify_gate": bool(inst.verify.get("checks")) and inst.verify.get("gate", True),
         "allow_overrides": inst.allow_overrides,
+        "baseline": True,  # global operator guardrail is always applied (inviolable floor)
+        "force_read_only": force_ro,
+        "extra": bool(g.get("extra")),
+        "system_prompt_append": build_guardrail(inst),
     }

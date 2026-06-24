@@ -14,6 +14,7 @@ class ClaudeEngine(Engine):
     name = "claude"
     binary = "claude"
     context_filename = "CLAUDE.md"
+    skills_dir = ".claude/skills"
     capabilities = Capabilities(
         plan_mode=True,
         json_output=True,
@@ -22,6 +23,7 @@ class ClaudeEngine(Engine):
         cost=True,
         vision=True,
         allowed_tools=True,
+        skills=True,
     )
 
     def build_argv(self, spec: RunSpec) -> list[str]:

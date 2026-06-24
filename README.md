@@ -33,6 +33,10 @@ The full design and rationale live in [`DESIGN.md`](./DESIGN.md) (32 sections).
 - **Isolated shell & login** — drop into the instance's sandbox container (`shell`) or log a
   subscription account into the instance's **own** auth dir (`login`); the host's `~/.claude`
   is never touched.
+- **Management API** — a control-plane under `/admin/*` (bearer token + loopback by default)
+  to do over HTTP everything the CLI does: instance CRUD & config, encrypted env vars
+  (masked), webhook auth, verify, MCP, CLAUDE.md context, request templates, **guardrails**
+  and **skills**, plus global config and read-only jobs/sessions/usage/audit. OpenAPI at `/docs`.
 - **Background daemon** — `serve -d` runs the webhook server detached (pidfile + log), with
   `--stop`, `--status`, and `--logs`; or generate a systemd unit with `install-service`.
 - **Operator guardrail** (on by default, every run) — a system prompt that refuses to leak
@@ -143,7 +147,7 @@ agenthook apply -f examples/agenthook.yaml      # reconcile instances; secrets s
 
 ```
 agenthook instance add|list|show|rm|resume      env set|get|list|rm   repo add|rm|list
-agenthook context|auth|template|mcp|verify       apply
+agenthook context|auth|template|mcp|verify       guardrails   skill add|rm|list   apply
 agenthook serve [-d|--stop|--status|--logs]      install-service   service start|stop|status|logs
 agenthook run | dry-run | send [--replay]        enter   shell   login
 agenthook jobs list|show     sessions list       logs -f
@@ -153,6 +157,46 @@ agenthook usage | audit [--export csv|json]
 The bare `agenthook` command (no subcommand) opens the **guided TUI** — an arrow-key menu
 over the same flows, with instance-first navigation, a job runner with inline plan approval,
 session/chat history, and bulk delete (single, multi, or select-all).
+
+## Management API (control-plane)
+
+Everything above is also reachable over HTTP under `/admin/*`, so you can manage agenthook
+from an app or dashboard — not just the terminal. It is guarded by a **bearer admin token**
+and, by default, **only answers loopback** (set `admin_remote: true` in `config.yaml` to allow
+remote callers). The token is auto-generated into `config.yaml` (`admin_token`) or supplied via
+`AGENTHOOK_ADMIN_TOKEN`. Interactive docs at `GET /docs`.
+
+```bash
+TOKEN=$(python -c "from agenthook.config import load_config as c; print(c().admin_token)")
+A=(-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
+
+# Create an instance (the encryption key is returned ONCE — store it).
+curl "${A[@]}" -X POST localhost:8080/admin/instances \
+  -d '{"name":"bugbot","repos":[{"url":"git@github.com:me/app.git"}],"deliverable":"pr"}'
+
+# Encrypted env (values are masked on read; secrets never come back in cleartext).
+curl "${A[@]}" -X PUT  localhost:8080/admin/instances/bugbot/env/ANTHROPIC_API_KEY \
+  -d '{"value":"sk-ant-…","secret":true}'
+curl "${A[@]}"          localhost:8080/admin/instances/bugbot/env       # -> ••••••…
+
+# CLAUDE.md context, MCP, verify, webhook auth, request templates — one route each.
+curl "${A[@]}" -X PUT  localhost:8080/admin/instances/bugbot/context  -d '{"body":"# Project rules…"}'
+
+# Skills (delivered as .claude/skills/<name>/SKILL.md at run time).
+curl "${A[@]}" -X PUT  localhost:8080/admin/instances/bugbot/skills/triage -d '{"body":"---\nname: triage\n---\n…"}'
+```
+
+**Guardrails are append-only.** The global operator guardrail is an inviolable floor — an
+instance overlay can only *add* rules or *harden* (e.g. force read-only), never disable a
+safety block. Relaxing keys are rejected (`422`).
+
+```bash
+curl "${A[@]}" -X PUT localhost:8080/admin/instances/bugbot/guardrails \
+  -d '{"extra":"Never write to the payments schema.","force_read_only":false}'
+```
+
+The same new fields are also on the CLI: `agenthook guardrails NAME [--extra … | --file F]
+[--force-read-only]` and `agenthook skill add|rm|list NAME …`.
 
 ## Development
 

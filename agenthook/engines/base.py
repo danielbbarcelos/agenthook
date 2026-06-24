@@ -26,6 +26,7 @@ class Capabilities:
     cost: bool = False  # reports token/cost usage
     vision: bool = False  # accepts image attachments
     allowed_tools: bool = False  # supports per-tool allow/deny
+    skills: bool = False  # supports per-instance skill files (e.g. .claude/skills)
 
 
 @dataclass
@@ -50,6 +51,9 @@ class Engine(abc.ABC):
     name: str = "base"
     binary: str = ""
     context_filename: str = "AGENTS.md"
+    # Workspace-relative dir where per-instance skills are materialized, one
+    # ``<name>/SKILL.md`` per skill. None when the engine has no skill concept.
+    skills_dir: str | None = None
     capabilities: Capabilities = Capabilities()
 
     # ---- command construction --------------------------------------------

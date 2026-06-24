@@ -35,6 +35,10 @@ class Config:
     callback_max_attempts: int = 5
     use_docker: bool = True  # set False to run engines directly (dev/test)
     docker_image: str = "agenthook/runner:latest"
+    # Management API (control-plane, /admin/*). Protected by a bearer token and,
+    # by default, bound to loopback only — remote access is an explicit opt-in.
+    admin_token: str = ""  # bearer for /admin/*; auto-generated if empty
+    admin_remote: bool = False  # allow /admin/* from non-loopback clients
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,8 +50,14 @@ def load_config() -> Config:
     data = data or {}
     known = set(Config.__dataclass_fields__)  # type: ignore[attr-defined]
     cfg = Config(**{k: v for k, v in data.items() if k in known})
+    dirty = False
     if not cfg.approval_secret:
         cfg.approval_secret = _pysecrets.token_urlsafe(32)
+        dirty = True
+    if not cfg.admin_token:
+        cfg.admin_token = _pysecrets.token_urlsafe(32)
+        dirty = True
+    if dirty:
         save_config(cfg)
     return cfg
 

@@ -29,12 +29,14 @@ env_app = typer.Typer(help="Manage encrypted env vars")
 jobs_app = typer.Typer(help="Inspect jobs")
 sessions_app = typer.Typer(help="Inspect sessions")
 service_app = typer.Typer(help="Control the systemd daemon")
+skill_app = typer.Typer(help="Manage an instance's skills")
 app.add_typer(instance_app, name="instance")
 instance_app.add_typer(repo_app, name="repo")
 app.add_typer(env_app, name="env")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(service_app, name="service")
+app.add_typer(skill_app, name="skill")
 
 console = Console()
 
@@ -305,6 +307,67 @@ def verify_set(
         inst.verify["setup"] = setup
     instances.save(inst)
     console.print(f"verify set on {name}")
+
+
+@app.command("guardrails")
+def guardrails_set(
+    name: str,
+    extra: Optional[str] = typer.Option(None, "--extra", help="extra rules appended to the baseline"),
+    file: Optional[Path] = typer.Option(None, "--file", exists=True, help="read extra rules from a file"),
+    force_read_only: Optional[bool] = typer.Option(
+        None, "--force-read-only/--no-force-read-only", help="harden: forbid edit/write tools"
+    ),
+    clear: bool = typer.Option(False, "--clear", help="remove the instance guardrail overlay"),
+):
+    """Overlay instance guardrails on the global baseline (append-only/hardening-only).
+
+    The global operator guardrail is an inviolable floor; this only ADDS rules or
+    hardens — it can never disable a safety block.
+    """
+    inst = _load(name)
+    if clear:
+        inst.guardrails = {}
+    else:
+        g = dict(inst.guardrails or {})
+        body = file.read_text() if file else extra
+        if body is not None:
+            g["extra"] = body
+        if force_read_only is not None:
+            g["force_read_only"] = force_read_only
+        inst.guardrails = g
+    instances.save(inst)  # validate() rejects any relaxation
+    console.print(f"guardrails set on {name}: {inst.guardrails or '(baseline only)'}")
+
+
+@skill_app.command("add")
+def skill_add(name: str, skill: str, file: Path = typer.Option(..., "--file", exists=True)):
+    """Add or replace a skill (a SKILL.md) on an instance."""
+    inst = _load(name)
+    inst.skills = {**inst.skills, skill: file.read_text()}
+    instances.save(inst)
+    console.print(f"skill '{skill}' set on {name}")
+
+
+@skill_app.command("rm")
+def skill_rm(name: str, skill: str):
+    """Remove a skill from an instance."""
+    inst = _load(name)
+    if skill not in inst.skills:
+        _err(f"skill {skill!r} not found on {name}")
+    inst.skills = {k: v for k, v in inst.skills.items() if k != skill}
+    instances.save(inst)
+    console.print(f"skill '{skill}' removed from {name}")
+
+
+@skill_app.command("list")
+def skill_list(name: str):
+    """List an instance's skills."""
+    inst = _load(name)
+    if not inst.skills:
+        console.print(f"{name} has no skills")
+        return
+    for s in sorted(inst.skills):
+        console.print(f"• {s}")
 
 
 # --- apply / serve / service ------------------------------------------------

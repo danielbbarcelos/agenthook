@@ -813,3 +813,37 @@ O payload pode trazer anexos (imagem, stack trace, log, arquivo) — forte para 
   exercitando auth/HMAC/fila/deliverable ponta a ponta.
 - **`agenthook send --replay <job_id>`** — reenvia um request passado para reproduzir.
 - **Builder interativo** (questionary, §23) para compor o payload por setas.
+
+## 33. Management API (control-plane HTTP)
+
+Toda a configuração — historicamente só via CLI — é também exposta sobre HTTP sob `/admin/*`,
+para gerenciar o agenthook a partir de um app/painel, não só do terminal. É uma casca fina
+sobre a mesma camada de negócio que o CLI usa (`instances.*`, `secrets.*`, `config.*`), com
+modelos pydantic apenas na borda; a validação autoritativa segue em `Instance.validate()`.
+
+**Proteção (dois portões, ambos obrigatórios).**
+- **Rede:** por padrão só responde a clientes **loopback**; acesso remoto é opt-in explícito
+  (`admin_remote: true` em `config.yaml`).
+- **Token:** **bearer** comparado em tempo constante — `AGENTHOOK_ADMIN_TOKEN` (env) ou
+  `config.admin_token` (auto-gerado, como o `approval_secret`).
+
+**Superfície.** Instances CRUD + pause/resume; sub-recursos `repos`, `auth` (webhook),
+`verify`, `mcp`, `context` (CLAUDE.md), `templates`, `guardrails`, `skills`; `env` encriptada;
+`config` global; e leituras de `jobs`/`sessions`/`usage`/`audit`. OpenAPI em `/docs`.
+
+**Segredos nunca em claro.** Valores `env` marcados como `secret` voltam **mascarados**
+(`secrets.obfuscate`); não há rota que devolva o valor pleno. O `config` mascara `admin_token`
+e `approval_secret`.
+
+**Guardrails são append-only / hardening-only.** O guardrail global do operador (§ runner) é um
+**piso inviolável**: o overlay de instância (`guardrails.extra`, `guardrails.force_read_only`)
+só **adiciona** regras ou **endurece** — nunca desliga um bloco de segurança. Na montagem do
+system prompt o addendum da instância vem **antes** e a baseline global **por último** (e a
+baseline já se declara não-sobreponível), então um addendum não consegue afrouxá-la. Chaves de
+afrouxamento são rejeitadas na validação (`422`). Afrouxamento real ficaria atrás de uma flag
+global explícita (`allow_guardrail_relaxation`), fora do escopo atual.
+
+**Skills (novo conceito).** Uma instância declara `skills` (nome → corpo de `SKILL.md`),
+entregues no workspace em `<engine.skills_dir>/<name>/SKILL.md` (Claude Code: `.claude/skills`)
+no mesmo ponto onde CLAUDE.md e `.mcp.json` são materializados. Engines anunciam suporte via
+`capabilities.skills` + `Engine.skills_dir`.

@@ -43,6 +43,11 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="agenthook", lifespan=lifespan)
 
+    # ---- management API (control-plane, /admin/*) -----------------------
+    from .admin_api import router as admin_router
+
+    app.include_router(admin_router)
+
     # ---- infra ----------------------------------------------------------
 
     @app.get("/healthz")
