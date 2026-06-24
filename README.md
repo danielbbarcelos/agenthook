@@ -1,4 +1,10 @@
-# agenthook
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/agenthook-lockup-solid-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/agenthook-lockup-solid-light.png">
+    <img alt="Agenthook" src="assets/brand/agenthook-lockup-solid-light.png" width="420">
+  </picture>
+</p>
 
 > Self-hosted CLI to run **agentic coding CLIs** (Claude Code, OpenAI Codex, Gemini CLI,
 > Aider, …) in **headless** mode, triggered by **webhooks**, inside isolated Docker
@@ -160,6 +166,22 @@ ruff check agenthook tests
 `AGENTHOOK_HOME` overrides the state root (`~/.agenthook`) — handy for tests and multiple
 isolated deployments. Set `use_docker: false` in `config.yaml` to run engines directly
 (dev only).
+
+## Brand assets
+
+Logos live in [`assets/brand/`](./assets/brand) — `icon` (the bolt alone) and `lockup`
+(bolt + wordmark), each in three frame styles (`solid` / `filled` / `dashed`) and two
+themes (`light` for light backgrounds, `dark` for dark ones). PNG with transparent
+background; use the `<picture>`/`prefers-color-scheme` pattern from this README to swap by
+theme.
+
+<p align="center">
+  <img alt="icon solid"  src="assets/brand/agenthook-icon-solid-light.png"  height="72">
+  &nbsp;&nbsp;
+  <img alt="icon filled" src="assets/brand/agenthook-icon-filled-light.png" height="72">
+  &nbsp;&nbsp;
+  <img alt="icon dashed" src="assets/brand/agenthook-icon-dashed-light.png" height="72">
+</p>
 
 ## License
 

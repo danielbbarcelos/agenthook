@@ -35,7 +35,9 @@ BONE = "#e8e3d8"  # foreground
 BORDER = "#45413a"  # subtle box border — darker than muted, just a hairline
 
 # Node mark (the webhook → agent chain) — 3 rows, aligns with the wordmark.
-_MARK = "●─╮\n  ╰─●─╮\n      ╰─●"
+# Brand mark: the Agenthook lightning bolt, rendered in half-blocks to echo the
+# icon shipped in assets/brand/ (amber bolt). Aligns top with the wordmark rows.
+_MARK = " ▄██\n ▀▀█\n▄█▀\n█▀"
 
 # "agenthook" as a compact shaded-block wordmark (FIGlet 'pagga') — 3 rows.
 _WORDMARK = (
