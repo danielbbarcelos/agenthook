@@ -43,6 +43,7 @@ class RunContext:
     log_path: Path | None = None
     on_text: object = None  # callback(str) for live streaming, or None
     egress: object = None  # EgressGrant when egress lockdown is active, else None
+    git_token: str | None = None  # ephemeral GitHub App token minted for this job
     _buffer: list[str] = field(default_factory=list)
 
     def log(self, msg: str) -> None:
@@ -173,7 +174,7 @@ def _prepare_workspace(ctx: RunContext, *, require_prompt: bool = True) -> None:
 
     ctx.repos = inst.select_repos(job.request.get("repos"))
     job_root = paths.work_dir() / job.id
-    git_env = _process_env(ctx)
+    git_env = _git_env(ctx)  # host-side; carries an ephemeral GitHub App token if configured
 
     def _log_repo(r):
         first = not git_ops.mirror_path(inst, r).joinpath(".git").exists()
@@ -630,7 +631,9 @@ def _setup_egress(ctx: RunContext) -> None:
     allow = list(getattr(ctx.cfg, "egress_allow_default", []) or [])
     allow += ctx.inst.egress_allow()
     container_env: dict[str, str] = {}
-    strip: list[str] = []
+    # git/PR run host-side, so the agent never needs a git token — strip any
+    # static ones from the container to remove a standing exfiltration target.
+    strip: list[str] = ["GH_TOKEN", "GITHUB_TOKEN"]
     if model is not None:
         allow.append(model.host)
         gw_base = f"http://{BROKER_ALIAS}:{GW_PORT}/{token}"
@@ -670,6 +673,15 @@ def _teardown_egress(ctx: RunContext) -> None:
 
     egress_mod.deregister(ctx.cfg.egress_ctrl_port, ctx.egress.token)
     ctx.egress = None
+
+
+def _revoke_git_token(ctx: RunContext) -> None:
+    if not ctx.git_token:
+        return
+    from . import github_app
+
+    github_app.revoke(ctx.git_token)
+    ctx.git_token = None
 
 
 def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
@@ -757,6 +769,66 @@ def _process_env(ctx: RunContext) -> dict[str, str]:
     return env
 
 
+def _git_host(url: str) -> str | None:
+    """The https host of a git remote (for scoping the auth extraheader)."""
+    if url.startswith("https://"):
+        rest = url[len("https://"):]
+        return rest.split("/", 1)[0].split("@")[-1] or None
+    return None
+
+
+def _mint_git_token(ctx: RunContext) -> str | None:
+    """Mint (once per job) a short-lived GitHub App installation token, scoped to
+    the job's repos. Returns None when no App is configured (falls back to any
+    static GH_TOKEN the instance still carries)."""
+    if ctx.git_token is not None:
+        return ctx.git_token
+    from . import github_app
+
+    cfg = github_app.AppConfig.from_secrets(
+        lambda name: secrets.get_control_secret(ctx.inst, name)
+    )
+    if cfg is None:
+        return None
+    repos = [r.name for r in (ctx.repos or [])] or None
+    try:
+        token, _exp = github_app.mint(cfg, repositories=repos)
+    except Exception as exc:  # noqa: BLE001
+        ctx.log(f"github app: token mint failed ({exc}); falling back to static creds")
+        return None
+    ctx.git_token = token
+    ctx.log("github app: minted short-lived installation token for git ops")
+    return token
+
+
+def _git_env(ctx: RunContext) -> dict[str, str]:
+    """Host-side env for git/gh operations. Injects an ephemeral GitHub App token
+    (if configured) as GH_TOKEN for ``gh`` and as an http extraheader for
+    ``git``, without writing it to disk. This env is never passed to the
+    container — git/PR run host-side."""
+    env = _process_env(ctx)
+    token = _mint_git_token(ctx)
+    if not token:
+        return env
+    from . import github_app
+
+    env["GH_TOKEN"] = token
+    env["GITHUB_TOKEN"] = token
+    # Inject `http.<host>.extraheader` via env so no git command line or on-disk
+    # credential helper carries the token. One entry per unique repo host.
+    hosts = {h for h in (_git_host(r.url) for r in (ctx.repos or [])) if h}
+    hosts.add("github.com")
+    header = github_app.auth_extraheader(token)
+    pairs = []
+    for host in sorted(hosts):
+        pairs.append((f"http.https://{host}/.extraheader", header))
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{i}"] = k
+        env[f"GIT_CONFIG_VALUE_{i}"] = v
+    return env
+
+
 # --- Deliverable application ------------------------------------------------
 
 
@@ -772,7 +844,7 @@ def _apply_deliverable(ctx: RunContext) -> None:
     branch = inst.pr_branch.format(id=job.id)
     msg = _commit_message(job)
     body = job.result.text if job.result else ""
-    env = _process_env(ctx)
+    env = _git_env(ctx)  # host-side push/PR env with the ephemeral App token
 
     patches: list[dict] = []
     pr_urls: list[dict] = []
@@ -839,6 +911,7 @@ def _finalize(ctx: RunContext) -> None:
     store.save_job(job)
 
     _teardown_egress(ctx)
+    _revoke_git_token(ctx)
 
     retention = ctx.cfg.retention
     prompt_full = output_full = None

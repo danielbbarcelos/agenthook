@@ -211,3 +211,14 @@ def resolve_env(inst: Instance) -> dict[str, str]:
     secrets), which the agent must never see."""
     backend = get_backend(inst)
     return {ev.name: ev.value for ev in backend.items(inst) if is_agent_visible(ev.name)}
+
+
+def get_control_secret(inst: Instance, name: str) -> str | None:
+    """Read a control-plane secret (reserved AGENTHOOK_* namespace) host-side.
+    These are read by agenthook itself and never reach the agent runtime."""
+    if is_agent_visible(name):
+        raise SecretsError(f"{name!r} is not a control-plane secret (missing {RESERVED_PREFIX} prefix)")
+    try:
+        return get_backend(inst).get(inst, name)
+    except Exception:
+        return None
