@@ -27,6 +27,7 @@ from .api_models import (
     GuardrailsIn,
     InstanceCreate,
     InstancePatch,
+    LoginCodeIn,
     RepoIn,
 )
 from .instances import Instance, InstanceError
@@ -59,6 +60,29 @@ def _summary(inst: Instance) -> dict:
         "repos": inst.repo_names(),
         "paused": inst.paused,
     }
+
+
+# --- engines ----------------------------------------------------------------
+
+
+@router.get("/engines")
+def list_engines():
+    """Available engines, for the UI's selector and auth-mode hints."""
+    from dataclasses import asdict
+
+    from .engines import registry
+
+    out = []
+    for name, cls in registry().items():
+        eng = cls()
+        out.append(
+            {
+                "name": name,
+                "supports_subscription": bool(eng.login_argv("/tmp/_agenthook_probe")),
+                "capabilities": asdict(eng.capabilities),
+            }
+        )
+    return out
 
 
 # --- instances: CRUD --------------------------------------------------------
@@ -198,6 +222,87 @@ def set_auth(name: str, body: DictIn):
     inst.webhook_auth = body.model_dump()
     _save(inst)
     return inst.webhook_auth
+
+
+# --- engine auth (the coding engine's own login, NOT the webhook auth above) --
+#
+# The actual subscription login is interactive (OAuth/TTY) and stays in the CLI
+# (`agenthook login <name>`); over HTTP we only expose status and logout. The
+# auth *mode* (api-key | subscription) is set via PATCH /instances/{name}.
+
+
+def _has_token_secret(inst: Instance, eng) -> bool:
+    """True when the engine's OAuth-token secret is stored for this instance."""
+    key = eng.token_env_name()
+    if not key:
+        return False
+    return any(ev.name == key for ev in secrets.get_backend(inst).items(inst))
+
+
+@router.get("/instances/{name}/engine-auth")
+def get_engine_auth(name: str):
+    from . import engine_auth
+    from .engines import get_engine
+
+    inst = _get(name)
+    eng = get_engine(inst.engine)
+    # Authenticated when a dir credential exists OR the headless token secret is set.
+    authed = engine_auth.is_authenticated(inst)
+    if authed is not True and _has_token_secret(inst, eng):
+        authed = True
+    return {
+        "mode": inst.engine_auth,  # api-key | subscription
+        "authenticated": authed,  # True/False/None (None p/ api-key sem token)
+        "supports_subscription": bool(eng.login_argv("/tmp/_agenthook_probe")),
+        "supports_token_login": bool(eng.setup_token_argv()),
+        "login_command": f"agenthook login {name}",
+    }
+
+
+@router.post("/instances/{name}/engine-auth/login/start")
+def engine_login_start(name: str):
+    """Begin the headless subscription login; returns an OAuth URL to authorize."""
+    from . import engine_login
+
+    inst = _get(name)
+    try:
+        session, url = engine_login.start(inst)
+    except engine_login.LoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"session": session, "url": url}
+
+
+@router.post("/instances/{name}/engine-auth/login/code")
+def engine_login_code(name: str, body: LoginCodeIn):
+    """Submit the pasted code; captures the token and stores it as a secret."""
+    from . import engine_login
+    from .engines import get_engine
+
+    inst = _get(name)
+    eng = get_engine(inst.engine)
+    key = eng.token_env_name()
+    if not key:
+        raise HTTPException(status_code=400, detail="engine has no token-based login")
+    try:
+        token = engine_login.submit_code(body.session, body.code)
+    except engine_login.LoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    secrets.get_backend(inst).set(inst, key, token, True)  # encrypted, masked, never echoed
+    return {"authenticated": True}
+
+
+@router.delete("/instances/{name}/engine-auth", status_code=204)
+def logout_engine_auth(name: str):
+    from . import engine_auth
+    from .engines import get_engine
+
+    inst = _get(name)
+    engine_auth.logout(inst)
+    # Also clear the headless token secret so the instance is truly disconnected.
+    key = get_engine(inst.engine).token_env_name()
+    if key and _has_token_secret(inst, get_engine(inst.engine)):
+        secrets.get_backend(inst).delete(inst, key)
+    return Response(status_code=204)
 
 
 @router.put("/instances/{name}/verify")

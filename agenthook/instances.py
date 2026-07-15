@@ -85,6 +85,12 @@ class Instance:
             raise InstanceError(f"unknown deliverable {self.deliverable!r}")
         if self.engine_auth not in {"api-key", "subscription"}:
             raise InstanceError(f"unknown engine_auth {self.engine_auth!r}")
+        from .engines import available  # local import to avoid an import cycle
+
+        if self.engine not in available():
+            raise InstanceError(
+                f"unknown engine {self.engine!r}; available: {', '.join(available())}"
+            )
         mode = self.limits.get("mode")
         if mode and mode not in {m.value for m in Mode}:
             raise InstanceError(f"unknown default mode {mode!r}")

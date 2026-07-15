@@ -73,6 +73,14 @@ class ClaudeEngine(Engine):
         # Interactive: the user runs /login inside, writing creds into auth_dir.
         return [self.binary]
 
+    def setup_token_argv(self) -> list[str]:
+        # Headless OAuth: prints an authorize URL, takes a pasted code, emits a
+        # ~1-year token. Consumed via CLAUDE_CODE_OAUTH_TOKEN (see token_env_name).
+        return [self.binary, "setup-token"]
+
+    def token_env_name(self) -> str:
+        return "CLAUDE_CODE_OAUTH_TOKEN"
+
     def credential_files(self, auth_dir) -> list:
         from pathlib import Path
 

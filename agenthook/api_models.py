@@ -85,6 +85,14 @@ class GuardrailsIn(BaseModel):
     force_read_only: Optional[bool] = None
 
 
+class LoginCodeIn(BaseModel):
+    """The pasted OAuth code for an in-progress headless subscription login."""
+
+    model_config = {"extra": "forbid"}
+    session: str
+    code: str
+
+
 class ConfigPatch(BaseModel):
     model_config = {"extra": "forbid"}
     host: Optional[str] = None

@@ -93,6 +93,17 @@ class Engine(abc.ABC):
         or None if this engine has no interactive login."""
         return None
 
+    def setup_token_argv(self) -> list[str] | None:
+        """argv for a headless subscription login that prints an OAuth URL,
+        accepts a pasted code, and emits a long-lived token on stdout — or None
+        if the engine has no such flow. Drives the in-UI 'connect in browser'."""
+        return None
+
+    def token_env_name(self) -> str | None:
+        """Env var that carries the token produced by :meth:`setup_token_argv`,
+        stored as an instance secret and injected at run time. None when N/A."""
+        return None
+
     def credential_files(self, auth_dir) -> list:
         """Files under ``auth_dir`` whose presence means a login exists. Empty
         when the engine isn't dir-credential based (e.g. pure api-key)."""

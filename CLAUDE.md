@@ -20,3 +20,13 @@ consistentes. Rode após cada rodada de alterações, sem precisar pedir.
 A interface (TUI) segue a direção **Guided** documentada em `design-system/`
 (ver `design-system/README.md` — paleta, padrões, mapa de navegação e as telas).
 A spec de produto vive em `DESIGN.md`.
+
+## Roadmap / produto (Agenthook como plataforma multi-projeto)
+
+Plano de ação para usar o Agenthook como task runner por projeto (webhooks de
+tickets/kanban → agente de código), integrado ao app `projector` do sistema
+`dbmv/workspace`, com hardening de segredo/egress:
+
+- [`docs/product-plan.md`](docs/product-plan.md) — plano faseado (Agenthook + Projector), sequência, decisões pendentes.
+- [`docs/security-and-secrets.md`](docs/security-and-secrets.md) — modelo de ameaça, decisão de tier Infisical (Community vs Enterprise; por que **não** Pro), efemeridade de credencial sem Enterprise.
+- [`docs/infisical-alternatives-prompt.md`](docs/infisical-alternatives-prompt.md) — prompt para pesquisar alternativas ao Infisical (dynamic DB secrets self-hosted grátis).
