@@ -13,9 +13,9 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
-from . import approval, auth, instances, store
+from . import approval, auth, instances, ratelimit, store
 from .config import load_config
 from .engines import get_engine
 from .models import Deliverable, Job, JobStatus, Mode
@@ -118,13 +118,25 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "not found"}, status_code=404)
         return StreamingResponse(_log_stream(job_id), media_type="text/event-stream")
 
+    # Approval is a two-step: a chat "Approve" button is a URL (browser GET), so
+    # GET renders a confirm page and the actual state change happens on POST. This
+    # keeps a link prefetch / Referer leak from silently approving a job, and
+    # keeps the token out of the acting request's URL (it rides the POST body).
+    @app.get("/jobs/{job_id}/approve")
+    async def approve_confirm(job_id: str, token: str = ""):
+        return _confirm_page(job_id, "approve", token)
+
+    @app.get("/jobs/{job_id}/reject")
+    async def reject_confirm(job_id: str, token: str = ""):
+        return _confirm_page(job_id, "reject", token)
+
     @app.post("/jobs/{job_id}/approve")
-    async def approve(job_id: str, token: str):
-        return _decide(app, job_id, "approve", token)
+    async def approve(job_id: str, request: Request):
+        return _decide(app, job_id, "approve", await _decision_token(request), request)
 
     @app.post("/jobs/{job_id}/reject")
-    async def reject(job_id: str, token: str):
-        return _decide(app, job_id, "reject", token)
+    async def reject(job_id: str, request: Request):
+        return _decide(app, job_id, "reject", await _decision_token(request), request)
 
     return app
 
@@ -150,6 +162,14 @@ def _mount_panel(app: FastAPI) -> None:
 # --- request handling -------------------------------------------------------
 
 
+def _rate_limited(retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        {"error": "rate limited", "retry_after": retry_after},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 async def _authed_instance(name: str, request: Request):
     try:
         inst = instances.load(name)
@@ -160,9 +180,32 @@ async def _authed_instance(name: str, request: Request):
     if len(body) > cfg.payload_max_kb * 1024:
         return None, body, JSONResponse({"error": "payload too large"}, status_code=413)
     client_ip = request.client.host if request.client else None
+    ip_key = client_ip or "unknown"
+
+    # Tier A: pre-auth per-IP flood guard — throttle credential-stuffing before
+    # spending HMAC/secret work on the request.
+    okA, retryA = ratelimit.check(
+        f"ip:{ip_key}", ratelimit.Limit(cfg.webhook_ip_rpm, cfg.webhook_ip_rpm)
+    )
+    if not okA:
+        return None, body, _rate_limited(retryA)
+
     ok, reason = auth.check_auth(inst, dict(request.headers), body, client_ip)
     if not ok:
         return None, body, JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    # Tier B: per-(instance, ip) budget — after auth, so a legit high-volume
+    # integration and an attacker are distinguished by instance. Override via
+    # ``instance.limits.rate`` = {rpm, burst}.
+    rate = inst.limits.get("rate") if isinstance(inst.limits, dict) else None
+    rate = rate if isinstance(rate, dict) else {}
+    okB, retryB = ratelimit.check(
+        f"inst:{inst.name}:{ip_key}",
+        ratelimit.Limit(rate.get("rpm", cfg.webhook_rate_rpm), rate.get("burst", cfg.webhook_rate_burst)),
+    )
+    if not okB:
+        return None, body, _rate_limited(retryB)
+
     if inst.paused:
         return None, body, JSONResponse(
             {"error": "instance paused", "reason": inst.paused_reason}, status_code=409
@@ -243,14 +286,64 @@ def _resolve_params(inst, payload):
     except ValueError as exc:
         return None, None, f"invalid params: {exc}"
 
-    # Capability validation (§16).
+    # Least-privilege: a code-mutating deliverable must go through plan->apply
+    # (human approval) unless the instance explicitly opts into auto-apply. This
+    # is enforced regardless of allow_overrides — a webhook caller must never be
+    # able to request a direct, unreviewed push.
     engine = get_engine(inst.engine)
+    if deliverable.mutates_code and mode is not Mode.PLAN and not inst.allow_auto_apply:
+        if not engine.capabilities.plan_mode:
+            return None, None, (
+                f"engine {inst.engine!r} cannot enforce plan->apply for a "
+                f"code-mutating deliverable; set allow_auto_apply to bypass"
+            )
+        mode = Mode.PLAN
+
+    # Capability validation (§16).
     if mode is Mode.PLAN and not engine.capabilities.plan_mode:
         return None, None, f"engine {inst.engine!r} does not support plan mode"
     return deliverable, mode, None
 
 
-def _decide(app: FastAPI, job_id: str, action: str, token: str):
+async def _decision_token(request: Request) -> str:
+    """Read the approval token from the POST form body (the confirm page) or,
+    for backward-compatible/programmatic callers, the query string. The body is
+    parsed manually (urlencoded) to avoid a python-multipart dependency."""
+    from urllib.parse import parse_qs
+
+    token = request.query_params.get("token", "")
+    try:
+        raw = (await request.body()).decode("utf-8", "replace")
+        if raw:
+            vals = parse_qs(raw).get("token")
+            if vals:
+                token = vals[0]
+    except Exception:  # noqa: BLE001 — no/oversized body; fall back to query param
+        pass
+    return token
+
+
+def _confirm_page(job_id: str, action: str, token: str) -> HTMLResponse:
+    """A minimal confirm page whose button POSTs the decision (token in the body).
+    GET is safe/idempotent, so a link prefetch never changes state."""
+    import html
+
+    verb = "Approve" if action == "approve" else "Reject"
+    jid = html.escape(job_id)
+    tok = html.escape(token)
+    body = (
+        f"<!doctype html><meta charset=utf-8><title>{verb} job {jid}</title>"
+        "<div style='font:16px system-ui;max-width:32rem;margin:4rem auto;text-align:center'>"
+        f"<h1>{verb} job <code>{jid}</code>?</h1>"
+        f"<form method='post' action='/jobs/{jid}/{action}'>"
+        f"<input type='hidden' name='token' value='{tok}'>"
+        f"<button style='font:600 16px system-ui;padding:.6rem 1.4rem;cursor:pointer'>"
+        f"Confirm {verb.lower()}</button></form></div>"
+    )
+    return HTMLResponse(body)
+
+
+def _decide(app: FastAPI, job_id: str, action: str, token: str, request: Request | None = None):
     cfg = load_config()
     if not approval.verify_token(cfg.approval_secret, job_id, action, token):
         return JSONResponse({"error": "invalid or expired token"}, status_code=403)
@@ -258,14 +351,18 @@ def _decide(app: FastAPI, job_id: str, action: str, token: str):
     if not job or job.status is not JobStatus.AWAITING_APPROVAL:
         return JSONResponse({"error": "job not awaiting approval"}, status_code=409)
 
+    approver_ip = request.client.host if (request and request.client) else "unknown"
+
     if action == "reject":
         job.status = JobStatus.REJECTED
         store.save_job(job)
+        store.record_audit(job, output_full=f"approval:reject from {approver_ip}")
         return {"job_id": job_id, "status": "rejected"}
 
     # Approve: spawn an apply job that resumes the plan with mode=auto.
     job.status = JobStatus.SUCCESS
     store.save_job(job)
+    store.record_audit(job, output_full=f"approval:approve from {approver_ip}")
     apply_job = Job(
         instance=job.instance,
         deliverable=job.deliverable,

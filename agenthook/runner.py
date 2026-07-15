@@ -499,6 +499,8 @@ def _build_runspec(
     force_ro = bool((inst.guardrails or {}).get("force_read_only"))
     if job.deliverable.read_only or force_ro:
         disallowed = sorted(set(disallowed) | set(engine.read_only_disallowed_tools()))
+        # Enumerated allowlist backstop; the denylist above still hard-denies.
+        allowed = sorted(set(allowed) | set(engine.read_only_allowed_tools()))
     spec = RunSpec(
         prompt=prompt,
         mode=mode or job.mode,

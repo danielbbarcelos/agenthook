@@ -116,5 +116,17 @@ class Engine(abc.ABC):
         return (not plan or c.plan_mode) and (not resume or c.resume) and (not mcp or c.mcp)
 
     def read_only_disallowed_tools(self) -> list[str]:
-        """Tools to forbid for read-only deliverables (analysis)."""
-        return ["Edit", "Write", "NotebookEdit"]
+        """Tools to forbid for read-only deliverables (analysis).
+
+        Bash is included: under a sandboxed run the engine may auto-approve
+        every non-denied tool (``--dangerously-skip-permissions``), so leaving
+        Bash open would let a read-only job run ``psql``/``curl`` and write via
+        the shell, defeating the read-only contract. Analysis explores the repo
+        through Read/Grep/Glob (see :meth:`read_only_allowed_tools`)."""
+        return ["Bash", "Edit", "Write", "NotebookEdit"]
+
+    def read_only_allowed_tools(self) -> list[str]:
+        """Closed allowlist for read-only deliverables — a defense-in-depth
+        backstop to the denylist that stays correct even if new mutating tools
+        are added under names the denylist doesn't enumerate."""
+        return ["Read", "Grep", "Glob", "LS", "TodoWrite"]

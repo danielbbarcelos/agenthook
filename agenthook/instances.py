@@ -59,6 +59,7 @@ class Instance:
     callback_url: str | None = None
     pr_branch: str = "agenthook/job-{id}"
     allow_overrides: list[str] = field(default_factory=list)
+    allow_auto_apply: bool = False  # opt-in: skip plan->apply approval for code-mutating deliverables
     limits: dict[str, Any] = field(default_factory=dict)  # timeout, max_turns, concurrency, retry
     verify: dict[str, Any] = field(default_factory=dict)  # §18
     mcp: dict[str, Any] = field(default_factory=dict)  # §25
@@ -94,6 +95,8 @@ class Instance:
         mode = self.limits.get("mode")
         if mode and mode not in {m.value for m in Mode}:
             raise InstanceError(f"unknown default mode {mode!r}")
+        if not isinstance(self.allow_auto_apply, bool):
+            raise InstanceError("allow_auto_apply must be a boolean")
         seen: set[str] = set()
         for r in self.repos:
             if not r.get("url"):

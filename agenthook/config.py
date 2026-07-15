@@ -35,6 +35,11 @@ class Config:
     callback_max_attempts: int = 5
     use_docker: bool = True  # set False to run engines directly (dev/test)
     docker_image: str = "agenthook/runner:latest"
+    # Webhook rate limiting (token bucket, per-process — see ratelimit.py). The
+    # per-instance override lives in ``instance.limits.rate`` ({rpm, burst}).
+    webhook_rate_rpm: int = 120  # default post-auth budget per (instance, ip)
+    webhook_rate_burst: int = 40
+    webhook_ip_rpm: int = 300  # pre-auth per-ip flood guard (all instances)
     # Management API (control-plane, /admin/*). Protected by a bearer token and,
     # by default, bound to loopback only — remote access is an explicit opt-in.
     admin_token: str = ""  # bearer for /admin/*; auto-generated if empty
