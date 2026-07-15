@@ -16,7 +16,7 @@ Vite · React · TypeScript · Tailwind · shadcn/ui · TanStack Query · React 
 
 ```bash
 # 1) Backend running (it provides /admin and the SSE job stream):
-agenthook serve --host 127.0.0.1 --port 8080
+agenthook serve --host 127.0.0.1 --port 8090   # dev proxy targets 8090 by default
 
 # 2) Panel dev server (proxies /admin, /jobs, /healthz to the backend — no CORS):
 cd web

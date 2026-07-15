@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { InstanceState } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,11 +32,15 @@ export function Instances() {
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
   const [deliverable, setDeliverable] = useState("analysis");
+  const [engine, setEngine] = useState("claude");
+
+  const engines = useQuery({ queryKey: ["engines"], queryFn: api.listEngines });
 
   const create = useMutation({
     mutationFn: () =>
       api.createInstance({
         name,
+        engine,
         deliverable,
         repos: repo ? [{ url: repo }] : [],
       }),
@@ -43,6 +48,7 @@ export function Instances() {
       setOpen(false);
       setName("");
       setRepo("");
+      setEngine("claude");
       setKeyResult(res);
       qc.invalidateQueries({ queryKey: ["instances"] });
     },
@@ -50,13 +56,16 @@ export function Instances() {
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Instances</h1>
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="h-4 w-4" /> New instance
-        </Button>
-      </div>
+    <div>
+      <PageHeader
+        title="Instances"
+        subtitle="A repository agenthook can act on, with its own engine, secrets, and rules."
+        actions={
+          <Button onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" /> New instance
+          </Button>
+        }
+      />
 
       <Card>
         <Table>
@@ -79,8 +88,8 @@ export function Instances() {
             )}
             {data?.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
-                  No instances yet — create one to get started.
+                <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                  No instances yet. Create one to connect a repository and start running jobs.
                 </TableCell>
               </TableRow>
             )}
@@ -118,6 +127,21 @@ export function Instances() {
             <div className="space-y-2">
               <Label htmlFor="repo">Repo URL (optional)</Label>
               <Input id="repo" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="git@github.com:me/app.git" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="engine">Engine</Label>
+              <select
+                id="engine"
+                value={engine}
+                onChange={(e) => setEngine(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+              >
+                {(engines.data ?? [{ name: "claude" }]).map((e) => (
+                  <option key={e.name} value={e.name} className="bg-card">
+                    {e.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="deliverable">Deliverable</Label>

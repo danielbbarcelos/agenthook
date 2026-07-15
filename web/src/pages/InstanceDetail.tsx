@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pause, Play, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Pause, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { CodeEditor } from "@/components/CodeEditor";
@@ -75,7 +75,8 @@ export function InstanceDetail() {
           <TabsTrigger value="config">Config</TabsTrigger>
           <TabsTrigger value="repos">Repos</TabsTrigger>
           <TabsTrigger value="env">Env</TabsTrigger>
-          <TabsTrigger value="auth">Auth</TabsTrigger>
+          <TabsTrigger value="engine-auth">Engine auth</TabsTrigger>
+          <TabsTrigger value="auth">Webhook auth</TabsTrigger>
           <TabsTrigger value="verify">Verify</TabsTrigger>
           <TabsTrigger value="mcp">MCP</TabsTrigger>
           <TabsTrigger value="context">CLAUDE.md</TabsTrigger>
@@ -86,6 +87,7 @@ export function InstanceDetail() {
         <TabsContent value="config"><ConfigPanel inst={i} /></TabsContent>
         <TabsContent value="repos"><ReposPanel name={name} /></TabsContent>
         <TabsContent value="env"><EnvPanel name={name} /></TabsContent>
+        <TabsContent value="engine-auth"><EngineAuthPanel inst={i} /></TabsContent>
         <TabsContent value="auth"><JsonPanel title="Webhook auth" value={i.webhook_auth} save={(v) => api.setAuth(name, v)} /></TabsContent>
         <TabsContent value="verify"><JsonPanel title="Verify (self-heal)" value={i.verify} save={(v) => api.setVerify(name, v)} /></TabsContent>
         <TabsContent value="mcp"><JsonPanel title="MCP servers" value={i.mcp} save={(v) => api.setMcp(name, v)} /></TabsContent>
@@ -111,14 +113,18 @@ export function InstanceDetail() {
 
 function ConfigPanel({ inst }: { inst: Instance }) {
   const qc = useQueryClient();
+  const [engine, setEngine] = useState(inst.engine);
   const [model, setModel] = useState(inst.model ?? "");
   const [deliverable, setDeliverable] = useState(inst.deliverable);
   const [branch, setBranch] = useState(inst.branch_base);
   const [prompt, setPrompt] = useState(inst.default_prompt ?? "");
 
+  const engines = useQuery({ queryKey: ["engines"], queryFn: () => api.listEngines() });
+
   const save = useMutation({
     mutationFn: () =>
       api.patchInstance(inst.name, {
+        engine,
         model: model || null,
         deliverable,
         branch_base: branch,
@@ -137,7 +143,17 @@ function ConfigPanel({ inst }: { inst: Instance }) {
         <CardTitle>Configuration</CardTitle>
       </CardHeader>
       <CardContent className="grid max-w-xl gap-4">
-        <Field label="Engine"><Input value={inst.engine} disabled /></Field>
+        <Field label="Engine">
+          <select
+            value={engine}
+            onChange={(e) => setEngine(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+          >
+            {(engines.data ?? [{ name: inst.engine }]).map((e) => (
+              <option key={e.name} value={e.name} className="bg-card">{e.name}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Model"><Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="(engine default)" /></Field>
         <Field label="Default deliverable">
           <select
@@ -263,6 +279,205 @@ function EnvPanel({ name }: { name: string }) {
             {env.data?.length === 0 && <TableRow><TableCell colSpan={4} className="text-muted-foreground">No env vars.</TableCell></TableRow>}
           </TableBody>
         </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --- Engine auth (the coding engine's own login) ----------------------------
+
+function EngineAuthPanel({ inst }: { inst: Instance }) {
+  const qc = useQueryClient();
+  const name = inst.name;
+  const [copied, setCopied] = useState(false);
+  const [login, setLogin] = useState<{ session: string; url: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [urlCopied, setUrlCopied] = useState(false);
+
+  const status = useQuery({
+    queryKey: ["engine-auth", name],
+    queryFn: () => api.getEngineAuth(name),
+    refetchInterval: 3000, // live status while the operator logs in elsewhere
+  });
+
+  const setMode = useMutation({
+    mutationFn: (mode: string) => api.patchInstance(name, { engine_auth: mode }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["instance", name] });
+      qc.invalidateQueries({ queryKey: ["engine-auth", name] });
+    },
+    onError: err,
+  });
+  const logout = useMutation({
+    mutationFn: () => api.logoutEngineAuth(name),
+    onSuccess: () => {
+      toast.success("Subscription disconnected");
+      qc.invalidateQueries({ queryKey: ["engine-auth", name] });
+    },
+    onError: err,
+  });
+  const startLogin = useMutation({
+    mutationFn: () => api.startEngineLogin(name),
+    onSuccess: (r) => { setLogin(r); setCode(""); },
+    onError: err,
+  });
+  const submitCode = useMutation({
+    mutationFn: () => api.submitEngineLoginCode(name, { session: login!.session, code }),
+    onSuccess: () => {
+      toast.success("Subscription connected");
+      setLogin(null);
+      setCode("");
+      qc.invalidateQueries({ queryKey: ["engine-auth", name] });
+    },
+    onError: err,
+  });
+
+  const s = status.data;
+  const mode = inst.engine_auth;
+  const supportsSub = s?.supports_subscription ?? false;
+  const supportsTokenLogin = s?.supports_token_login ?? false;
+  const connected = s?.authenticated === true;
+  const cmd = s?.login_command ?? `agenthook login ${name}`;
+
+  const copy = () => {
+    navigator.clipboard?.writeText(cmd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  const copyUrl = () => {
+    navigator.clipboard?.writeText(login?.url ?? "");
+    setUrlCopied(true);
+    setTimeout(() => setUrlCopied(false), 1500);
+  };
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Engine auth</CardTitle></CardHeader>
+      <CardContent className="max-w-xl space-y-5">
+        <p className="text-sm text-muted-foreground">
+          How <span className="text-foreground">{inst.engine}</span> authenticates when running jobs. This is the
+          coding engine's own login — separate from the webhook auth that guards inbound requests.
+        </p>
+
+        {/* mode selector */}
+        <div className="space-y-2">
+          <Label>Mode</Label>
+          <div className="flex gap-2">
+            {[
+              { v: "subscription", label: "Subscription", disabled: !supportsSub },
+              { v: "api-key", label: "API key", disabled: false },
+            ].map((o) => (
+              <button
+                key={o.v}
+                disabled={o.disabled || setMode.isPending}
+                onClick={() => mode !== o.v && setMode.mutate(o.v)}
+                className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
+                  mode === o.v
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"
+                }`}
+              >
+                {o.label}
+                {o.disabled && <span className="block text-[11px] opacity-70">not supported by {inst.engine}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === "subscription" ? (
+          <div className="space-y-4 rounded-md border border-border bg-background/40 p-4">
+            <div className="flex items-center gap-2 text-sm">
+              <span className={connected ? "text-brand-sage" : "text-muted-foreground"}>●</span>
+              <span className="text-foreground">{connected ? "Connected" : "Not connected"}</span>
+              {status.isFetching && <span className="text-xs text-muted-foreground">⟳ checking…</span>}
+            </div>
+
+            {!connected && supportsTokenLogin && (
+              <div className="space-y-3">
+                {!login ? (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      Connect your Claude subscription without leaving the panel: we open the OAuth flow,
+                      you authorize in your browser, and paste back the code Claude shows you.
+                    </p>
+                    <Button size="sm" onClick={() => startLogin.mutate()} disabled={startLogin.isPending}>
+                      {startLogin.isPending ? "Starting…" : "Connect in browser"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <p className="text-sm text-muted-foreground">
+                        <span className="text-foreground">1.</span> Open this URL, sign in, and approve:
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={login.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex flex-1 items-center gap-1.5 break-all rounded border border-border bg-background p-2 font-mono text-xs text-brand-cyan hover:underline"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                          {login.url}
+                        </a>
+                        <Button size="sm" variant="outline" onClick={copyUrl}>
+                          {urlCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm text-muted-foreground">
+                        <span className="text-foreground">2.</span> Paste the code Claude gives you:
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={code}
+                          onChange={(e) => setCode(e.target.value)}
+                          placeholder="paste code here"
+                          onKeyDown={(e) => e.key === "Enter" && code.trim() && submitCode.mutate()}
+                        />
+                        <Button size="sm" onClick={() => submitCode.mutate()} disabled={!code.trim() || submitCode.isPending}>
+                          {submitCode.isPending ? "Verifying…" : "Submit"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setLogin(null); setCode(""); }}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {!connected && (
+              <details className="text-sm text-muted-foreground">
+                <summary className="cursor-pointer select-none hover:text-foreground">
+                  Prefer the terminal?
+                </summary>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="flex-1 break-all rounded border border-border bg-background p-2 font-mono text-sm text-foreground">
+                    {cmd}
+                  </code>
+                  <Button size="sm" variant="outline" onClick={copy}>
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </details>
+            )}
+
+            {connected && (
+              <Button size="sm" variant="outline" onClick={() => logout.mutate()} disabled={logout.isPending}>
+                Disconnect
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md border border-border bg-background/40 p-4 text-sm text-muted-foreground">
+            API-key mode reads the engine's key from the instance's environment. Set{" "}
+            <code className="text-brand-cyan">ANTHROPIC_API_KEY</code> (or your provider's key) as a secret in the{" "}
+            <span className="text-foreground">Env</span> tab.
+          </div>
+        )}
       </CardContent>
     </Card>
   );

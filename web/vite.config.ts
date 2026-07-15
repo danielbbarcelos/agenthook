@@ -6,7 +6,7 @@ import { defineConfig } from "vite";
 // so the build is base-pathed there. In dev, requests to the agenthook API are
 // proxied to the backend so the browser stays same-origin (no CORS needed) and
 // the server's loopback gate sees a 127.0.0.1 client.
-const API_TARGET = process.env.AGENTHOOK_API ?? "http://127.0.0.1:8080";
+const API_TARGET = process.env.AGENTHOOK_API ?? "http://127.0.0.1:8090";
 
 export default defineConfig({
   base: "/ui/",

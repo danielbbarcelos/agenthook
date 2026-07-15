@@ -1,18 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { fmtCost } from "@/lib/utils";
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+function Stat({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</CardTitle>
+        <CardTitle className="eyebrow">{label}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="text-3xl font-bold text-brand-amber">{value}</div>
+        <div className={accent ? "text-3xl font-bold text-primary" : "text-3xl font-bold text-foreground"}>{value}</div>
       </CardContent>
     </Card>
   );
@@ -28,21 +29,25 @@ export function Dashboard() {
   const recent = jobs.data?.slice(0, 8) ?? [];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+    <div>
+      <PageHeader title="Dashboard" subtitle="A live read on instances, jobs, and spend." />
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Instances" value={instances.data?.length ?? "—"} />
-        <Stat label="Running" value={running} />
+        <Stat label="Running" value={running} accent={running > 0} />
         <Stat label="Queued" value={queued} />
         <Stat label="Total cost" value={fmtCost(usage.data?.cost_usd)} />
       </div>
 
-      <Card>
+      <Card className="mt-6">
         <CardHeader>
           <CardTitle>Recent jobs</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {recent.length === 0 && <p className="text-sm text-muted-foreground">No jobs yet.</p>}
+          {recent.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No jobs yet. Trigger one from your app's webhook, or run an instance.
+            </p>
+          )}
           {recent.map((j) => (
             <Link
               key={j.id}

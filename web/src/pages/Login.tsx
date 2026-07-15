@@ -1,8 +1,8 @@
-import { Zap } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Brand } from "@/components/Brand";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
@@ -23,50 +23,53 @@ export function Login() {
       await api.ping();
       nav("/", { replace: true });
     } catch (err) {
-      const msg =
+      setError(
         err instanceof ApiError && err.status === 403
-          ? "Loopback-only: the server refuses non-localhost callers. Set admin_remote: true to allow remote access."
-          : "Invalid admin token.";
-      setError(msg);
+          ? "This agenthook only answers localhost. Open the panel on the same machine, or set admin_remote: true in config.yaml."
+          : "That token didn't work. Check admin_token in config.yaml and try again.",
+      );
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <div className="mb-2 flex items-center gap-2">
-            <Zap className="h-6 w-6 text-brand-amber" fill="currentColor" />
-            <span className="text-xl font-bold">agenthook</span>
-          </div>
-          <CardTitle>Admin panel</CardTitle>
-          <CardDescription>
-            Paste the admin token to manage this agenthook. Find it with{" "}
-            <code className="text-brand-cyan">agenthook</code> config or in{" "}
-            <code className="text-brand-cyan">~/.agenthook/config.yaml</code> (admin_token).
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="token">Admin token</Label>
-              <Input
-                id="token"
-                type="password"
-                autoFocus
-                value={token}
-                onChange={(e) => setTok(e.target.value)}
-                placeholder="••••••••••••"
-              />
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full" disabled={!token.trim() || busy}>
-              {busy ? "Checking…" : "Enter"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 flex justify-center">
+          <Brand status="unknown" />
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <h1 className="text-lg font-bold tracking-tight">Sign in</h1>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">
+              Paste your admin token to manage this agenthook.
+            </p>
+            <form onSubmit={submit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="token">Admin token</Label>
+                <Input
+                  id="token"
+                  type="password"
+                  autoFocus
+                  autoComplete="off"
+                  value={token}
+                  onChange={(e) => setTok(e.target.value)}
+                  placeholder="••••••••••••••••"
+                  className="font-mono"
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+              <Button type="submit" className="w-full" disabled={!token.trim() || busy}>
+                {busy ? "Checking…" : "Sign in"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+        <p className="mt-4 text-center text-xs text-muted-foreground">
+          Find it with{" "}
+          <code className="font-mono text-foreground">grep admin_token ~/.agenthook/config.yaml</code>
+        </p>
+      </div>
     </div>
   );
 }

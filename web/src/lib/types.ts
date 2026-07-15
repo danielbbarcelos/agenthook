@@ -43,6 +43,36 @@ export interface Instance {
   key_fingerprint: string | null;
 }
 
+export interface EngineCapabilities {
+  plan_mode: boolean;
+  json_output: boolean;
+  mcp: boolean;
+  resume: boolean;
+  cost: boolean;
+  vision: boolean;
+  allowed_tools: boolean;
+  skills: boolean;
+}
+
+export interface EngineInfo {
+  name: string;
+  supports_subscription: boolean;
+  capabilities: EngineCapabilities;
+}
+
+export interface EngineAuthStatus {
+  mode: string; // api-key | subscription
+  authenticated: boolean | null; // null when not dir-based (api-key)
+  supports_subscription: boolean;
+  supports_token_login: boolean; // in-UI "connect in browser" flow available
+  login_command: string;
+}
+
+export interface EngineLoginStart {
+  session: string;
+  url: string;
+}
+
 export interface RepoEntry {
   url: string;
   name?: string;

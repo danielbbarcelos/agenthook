@@ -1,41 +1,72 @@
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Design-system palette translated to shadcn HSL tokens (dark only — warm
-   near-black earth with amber as brand). Source: design-system/README.md. */
+/* Two themes. Identity lives entirely in the mono type; color is a calm,
+   low-contrast neutral charcoal (dark) / neutral paper (light), with amber as
+   the single warm accent. Status hues (sage/cyan/clay/rust/lilac) stay fixed —
+   they're functional, not chrome. */
 @layer base {
+  /* Light (default :root) — neutral paper, no cream cliché. */
   :root {
-    --background: 50 17% 7%; /* #15140f */
-    --foreground: 41 26% 88%; /* #e8e3d8 bone */
+    --background: 240 5% 98%; /* #fafafa */
+    --surface: 0 0% 100%; /* sidebar/topbar */
+    --foreground: 240 6% 10%; /* #18181b */
 
-    --card: 44 19% 11%; /* #221f17 bar */
-    --card-foreground: 41 26% 88%;
-    --popover: 44 19% 11%;
-    --popover-foreground: 41 26% 88%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 6% 10%;
 
-    --primary: 39 67% 55%; /* #d9a441 amber */
-    --primary-foreground: 48 19% 6%;
+    --primary: 37 64% 45%; /* #b9842a darkened amber for light contrast */
+    --primary-foreground: 40 60% 97%;
 
-    --secondary: 44 17% 15%;
-    --secondary-foreground: 41 26% 88%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 6% 10%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 44%; /* #6b6b72 */
+    --accent: 240 5% 94%;
+    --accent-foreground: 240 6% 10%;
 
-    --muted: 44 17% 15%;
-    --muted-foreground: 43 12% 58%; /* stone, lightened for contrast */
+    --destructive: 354 52% 50%;
+    --destructive-foreground: 0 0% 98%;
 
-    --accent: 44 17% 18%;
-    --accent-foreground: 41 26% 88%;
-
-    --destructive: 354 42% 56%; /* #bf616a rust */
-    --destructive-foreground: 41 26% 95%;
-
-    --border: 38 9% 25%; /* #45413a */
-    --input: 38 9% 25%;
-    --ring: 39 67% 55%; /* amber */
+    --border: 240 6% 90%; /* #e6e6e9 */
+    --input: 240 6% 90%;
+    --ring: 37 64% 45%;
 
     --radius: 0.5rem;
+  }
+
+  /* Dark — neutral charcoal, layered elevation = low contrast. */
+  .dark {
+    --background: 240 8% 9%; /* #131316 content */
+    --surface: 240 8% 6%; /* #0e0e11 sidebar/topbar */
+    --foreground: 240 8% 91%; /* #e7e7ea */
+
+    --card: 240 8% 9%;
+    --card-foreground: 240 8% 91%;
+    --popover: 240 9% 11%; /* #1c1c20 */
+    --popover-foreground: 240 8% 91%;
+
+    --primary: 40 71% 58%; /* #e0ad48 gold */
+    --primary-foreground: 40 30% 8%;
+
+    --secondary: 240 7% 14%;
+    --secondary-foreground: 240 8% 91%;
+    --muted: 240 7% 14%;
+    --muted-foreground: 240 4% 55%; /* #87878d */
+    --accent: 240 7% 16%;
+    --accent-foreground: 240 8% 91%;
+
+    --destructive: 354 50% 58%;
+    --destructive-foreground: 240 8% 95%;
+
+    --border: 240 7% 16%; /* #26262b */
+    --input: 240 7% 16%;
+    --ring: 40 71% 58%;
   }
 
   * {
@@ -43,5 +74,37 @@
   }
   body {
     @apply bg-background text-foreground font-mono antialiased;
+    font-feature-settings: "ss01", "calt";
+  }
+
+  /* Calm down JetBrains Mono's default tight leading for body text. */
+  h1, h2, h3 {
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer utilities {
+  /* Uppercase mono eyebrow — the "structural/technical" voice. */
+  .eyebrow {
+    @apply text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground;
+  }
+
+  /* Signature: the brand bolt breathes while a job is running. Disabled under
+     prefers-reduced-motion by the global rule below. */
+  .bolt-live {
+    animation: bolt-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes bolt-pulse {
+    0%, 100% { opacity: 1; filter: drop-shadow(0 0 0 hsl(var(--primary) / 0)); }
+    50% { opacity: 0.65; filter: drop-shadow(0 0 6px hsl(var(--primary) / 0.55)); }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
   }
 }

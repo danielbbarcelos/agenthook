@@ -3,6 +3,9 @@ import type {
   AuditRow,
   Config,
   CreateInstanceResult,
+  EngineAuthStatus,
+  EngineInfo,
+  EngineLoginStart,
   EnvVar,
   Guardrails,
   Instance,
@@ -60,6 +63,16 @@ export const api = {
   // auth probe — used by the login screen
   ping: () => request<InstanceSummary[]>("GET", "/admin/instances"),
 
+  // liveness — public endpoint, drives the sidebar server status chip
+  health: async (): Promise<{ ok: boolean }> => {
+    const res = await fetch("/healthz");
+    if (!res.ok) throw new ApiError(res.status, "server down");
+    return res.json();
+  },
+
+  // engines
+  listEngines: () => request<EngineInfo[]>("GET", "/admin/engines"),
+
   // instances
   listInstances: () => request<InstanceSummary[]>("GET", "/admin/instances"),
   getInstance: (name: string) => request<Instance>("GET", `/admin/instances/${name}`),
@@ -85,6 +98,16 @@ export const api = {
     request<EnvVar>("PUT", `/admin/instances/${name}/env/${key}`, body),
   deleteEnv: (name: string, key: string) =>
     request<void>("DELETE", `/admin/instances/${name}/env/${key}`),
+
+  // engine auth (the coding engine's own login; status + logout only)
+  getEngineAuth: (name: string) =>
+    request<EngineAuthStatus>("GET", `/admin/instances/${name}/engine-auth`),
+  logoutEngineAuth: (name: string) =>
+    request<void>("DELETE", `/admin/instances/${name}/engine-auth`),
+  startEngineLogin: (name: string) =>
+    request<EngineLoginStart>("POST", `/admin/instances/${name}/engine-auth/login/start`),
+  submitEngineLoginCode: (name: string, body: { session: string; code: string }) =>
+    request<{ authenticated: boolean }>("POST", `/admin/instances/${name}/engine-auth/login/code`, body),
 
   // config blocks
   setAuth: (name: string, body: Record<string, unknown>) =>

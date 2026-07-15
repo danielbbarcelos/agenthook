@@ -3,7 +3,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import { App } from "./App";
-import { Toaster } from "./components/ui/sonner";
+import { ThemedToaster } from "./components/ui/sonner";
+import { ThemeProvider } from "./lib/theme";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -12,11 +13,13 @@ const queryClient = new QueryClient({
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <HashRouter>
-        <App />
-      </HashRouter>
-      <Toaster />
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <HashRouter>
+          <App />
+        </HashRouter>
+        <ThemedToaster />
+      </QueryClientProvider>
+    </ThemeProvider>
   </React.StrictMode>,
 );

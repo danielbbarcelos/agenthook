@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
@@ -7,8 +8,8 @@ import { fmtTime } from "@/lib/utils";
 export function Sessions() {
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => api.listSessions() });
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Sessions</h1>
+    <div>
+      <PageHeader title="Sessions" subtitle="Durable threads that keep context across jobs, keyed by thread." />
       <Card>
         <Table>
           <TableHeader>
@@ -30,7 +31,7 @@ export function Sessions() {
                 <TableCell className="text-muted-foreground">{fmtTime(s.updated_at)}</TableCell>
               </TableRow>
             ))}
-            {sessions.data?.length === 0 && <TableRow><TableCell colSpan={5} className="text-muted-foreground">No sessions.</TableCell></TableRow>}
+            {sessions.data?.length === 0 && <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No sessions yet. They appear when a job carries a thread key.</TableCell></TableRow>}
           </TableBody>
         </Table>
       </Card>

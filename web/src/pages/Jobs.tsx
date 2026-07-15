@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,9 +21,9 @@ export function Jobs() {
   });
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Jobs</h1>
-      <div className="flex gap-2">
+    <div>
+      <PageHeader title="Jobs" subtitle="Every execution, with status, cost, and live output." />
+      <div className="mb-4 flex gap-2">
         <Input className="w-56" placeholder="filter by instance" value={instance} onChange={(e) => setInstance(e.target.value)} />
         <select
           value={status}
@@ -59,7 +60,7 @@ export function Jobs() {
                 <TableCell className="text-muted-foreground">{fmtTime(j.created_at)}</TableCell>
               </TableRow>
             ))}
-            {jobs.data?.length === 0 && <TableRow><TableCell colSpan={6} className="text-muted-foreground">No jobs.</TableCell></TableRow>}
+            {jobs.data?.length === 0 && <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No jobs match. Clear the filters, or trigger one from your app.</TableCell></TableRow>}
           </TableBody>
         </Table>
       </Card>

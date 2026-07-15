@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +42,7 @@ export function Config() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Global config</h1>
+      <PageHeader title="Global config" subtitle="Server, approval, and retention settings. Secrets stay masked." />
       <Card>
         <CardHeader><CardTitle>Server</CardTitle></CardHeader>
         <CardContent className="grid max-w-2xl gap-4">

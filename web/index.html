@@ -1,9 +1,27 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e0ad48'%3E%3Cpolygon points='13,2 4,14 10,14 8,22 20,9 13,9'/%3E%3C/svg%3E"
+    />
     <title>agenthook · panel</title>
+    <script>
+      // Set the theme class before paint to avoid a flash.
+      (function () {
+        try {
+          var t = localStorage.getItem("agenthook.theme") || "system";
+          var dark =
+            t === "dark" ||
+            (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
