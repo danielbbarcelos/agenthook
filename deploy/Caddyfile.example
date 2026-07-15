@@ -1,0 +1,28 @@
+# Caddy reverse proxy for agenthook — automatic HTTPS.
+# Exposes ONLY the public surface: /hook/* and /healthz. The control-plane
+# (/admin, /ui, /jobs) stays loopback-only (reach it via SSH tunnel).
+#
+# Caddy must run on the SAME host as agenthook (proxy connects from 127.0.0.1),
+# so uvicorn trusts X-Forwarded-For and instance ip-allow / rate-limit see the
+# real client IP.
+#
+# Replace hooks.example.com with your domain.
+
+hooks.example.com {
+	encode gzip
+
+	@public path /hook/* /healthz
+	handle @public {
+		reverse_proxy 127.0.0.1:8080 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			# webhook jobs stream results; don't buffer
+			flush_interval -1
+		}
+	}
+
+	# Everything else (control-plane) is not publicly reachable.
+	handle {
+		respond 404
+	}
+}

@@ -30,3 +30,4 @@ tickets/kanban → agente de código), integrado ao app `projector` do sistema
 - [`docs/product-plan.md`](docs/product-plan.md) — plano faseado (Agenthook + Projector), sequência, decisões pendentes.
 - [`docs/security-and-secrets.md`](docs/security-and-secrets.md) — modelo de ameaça, decisão de tier Infisical (Community vs Enterprise; por que **não** Pro), efemeridade de credencial sem Enterprise.
 - [`docs/infisical-alternatives-prompt.md`](docs/infisical-alternatives-prompt.md) — prompt para pesquisar alternativas ao Infisical (dynamic DB secrets self-hosted grátis).
+- [`deploy/go-live.md`](deploy/go-live.md) — deploy VPS (systemd + reverse proxy TLS), build das imagens (runner + egress broker), secrets por instância e checklist de go-live. Fases 1–3 de hardening já implementadas (egress `agenthook/egress/`, GitHub App `agenthook/github_app.py`, least-privilege in-app).
