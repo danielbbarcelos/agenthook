@@ -68,6 +68,7 @@ class Instance:
     context_template: str | None = None  # §13 (inline template body)
     templates: dict[str, str] = field(default_factory=dict)  # §14, request_type -> body
     guardrails: dict[str, Any] = field(default_factory=dict)  # append-only over the global baseline
+    egress: dict[str, Any] = field(default_factory=dict)  # {allow: [...]} extra egress hosts (append-only)
     skills: dict[str, str] = field(default_factory=dict)  # name -> SKILL.md body
     paused: bool = False  # circuit breaker (§17)
     paused_reason: str | None = None
@@ -108,6 +109,7 @@ class Instance:
                 raise InstanceError(f"duplicate repo name {rname!r}")
             seen.add(rname)
         self._validate_guardrails()
+        self._validate_egress()
         for sname in self.skills:
             if not _NAME_RE.match(sname):
                 raise InstanceError(f"invalid skill name {sname!r}")
@@ -133,6 +135,31 @@ class Instance:
             raise InstanceError("guardrails.extra must be a string")
         if "force_read_only" in g and not isinstance(g["force_read_only"], bool):
             raise InstanceError("guardrails.force_read_only must be a boolean")
+
+    # Egress is append-only too: an instance may *widen* its own allowlist within
+    # the operator's global policy, but the internal-network fail-closed floor is
+    # inviolable — there is no key to disable egress control from the instance.
+    _EGRESS_KEYS = {"allow"}
+
+    def _validate_egress(self) -> None:
+        e = self.egress
+        if not e:
+            return
+        if not isinstance(e, dict):
+            raise InstanceError("egress must be a mapping")
+        unknown = set(e) - self._EGRESS_KEYS
+        if unknown:
+            raise InstanceError(
+                f"unknown egress key(s) {sorted(unknown)}; allowed: {sorted(self._EGRESS_KEYS)}"
+            )
+        if "allow" in e:
+            if not isinstance(e["allow"], list) or not all(isinstance(h, str) for h in e["allow"]):
+                raise InstanceError("egress.allow must be a list of host strings")
+
+    def egress_allow(self) -> list[str]:
+        """The instance's declared extra egress hosts (host globs)."""
+        e = self.egress or {}
+        return list(e.get("allow", []))
 
     @property
     def default_mode(self) -> str:

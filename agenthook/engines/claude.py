@@ -7,7 +7,7 @@ import json
 from ..errors import ClassifiedError, ErrorClass, classify_text
 from ..instances import Instance
 from ..models import Mode, Result, Usage
-from .base import Capabilities, Engine, RunSpec
+from .base import Capabilities, Engine, ModelEgress, RunSpec
 
 
 class ClaudeEngine(Engine):
@@ -63,6 +63,20 @@ class ClaudeEngine(Engine):
         if inst.engine_auth == "subscription":
             return []  # uses the instance's own isolated login (see login_argv)
         return ["ANTHROPIC_API_KEY"]
+
+    def egress_model(self, env: dict[str, str]) -> ModelEgress | None:
+        # Claude Code honors ANTHROPIC_BASE_URL to point the API at the broker
+        # gateway. api-key: hand the broker the real key (x-api-key) and leave a
+        # dummy in the container. subscription: no key here — the broker forwards
+        # the CLI's own OAuth header (inject_value stays empty).
+        key = env.get("ANTHROPIC_API_KEY", "")
+        return ModelEgress(
+            host="api.anthropic.com",
+            base_url_env="ANTHROPIC_BASE_URL",
+            key_env="ANTHROPIC_API_KEY",
+            inject_header="x-api-key",
+            inject_value=key,
+        )
 
     def auth_config_env(self, inst: Instance, auth_dir) -> dict[str, str]:
         # Relocate Claude Code's whole config (creds + state) to the instance's

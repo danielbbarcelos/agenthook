@@ -30,6 +30,25 @@ class Capabilities:
 
 
 @dataclass
+class ModelEgress:
+    """How an engine's model traffic is routed through the egress broker.
+
+    ``host`` is the real upstream host (added to the allowlist). For api-key
+    auth, ``inject_value`` carries the real key so the broker injects it and the
+    container holds only ``dummy_value`` under ``base_url_env``/``key_env``. For
+    subscription auth, ``inject_value`` is empty and the broker forwards the
+    CLI's own auth header — the key stays mounted but egress lockdown prevents
+    exfiltration either way."""
+
+    host: str
+    base_url_env: str  # env var the CLI honors to point at the gateway (e.g. ANTHROPIC_BASE_URL)
+    key_env: str = ""  # env var to overwrite with a dummy in the container (api-key only)
+    dummy_value: str = "agenthook-egress"
+    inject_header: str = "authorization"
+    inject_value: str = ""  # real credential the broker injects; "" = forward as-is
+
+
+@dataclass
 class RunSpec:
     """Engine-neutral description of a single run/turn."""
 
@@ -130,3 +149,10 @@ class Engine(abc.ABC):
         backstop to the denylist that stays correct even if new mutating tools
         are added under names the denylist doesn't enumerate."""
         return ["Read", "Grep", "Glob", "LS", "TodoWrite"]
+
+    def egress_model(self, env: dict[str, str]) -> "ModelEgress | None":
+        """Describe how to route this engine's model traffic through the egress
+        broker (host to allow + credential to inject). ``env`` is the resolved
+        per-job secret env. Return None to leave model traffic unrouted (the job
+        then has no model egress unless the operator allowlists a host)."""
+        return None

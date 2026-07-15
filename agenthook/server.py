@@ -67,6 +67,11 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             ready = False
             detail["instances"] = str(exc)
+        cfg = load_config()
+        if cfg.use_docker and getattr(cfg, "egress_enabled", False):
+            # Informational: the broker is brought up lazily per job, so a "down"
+            # here isn't fatal — it just means no job has needed it yet.
+            detail["egress_broker"] = _broker_healthy(cfg.egress_ctrl_port)
         return JSONResponse({"ready": ready, **detail}, status_code=200 if ready else 503)
 
     @app.get("/metrics")
@@ -160,6 +165,16 @@ def _mount_panel(app: FastAPI) -> None:
 
 
 # --- request handling -------------------------------------------------------
+
+
+def _broker_healthy(ctrl_port: int) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{ctrl_port}/healthz", timeout=1) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _rate_limited(retry_after: int) -> JSONResponse:

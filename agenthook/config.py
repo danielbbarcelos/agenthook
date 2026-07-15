@@ -8,7 +8,7 @@ Global config lives at ``~/.agenthook/config.yaml``. The declarative
 from __future__ import annotations
 
 import secrets as _pysecrets
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,13 @@ class Config:
     webhook_rate_rpm: int = 120  # default post-auth budget per (instance, ip)
     webhook_rate_burst: int = 40
     webhook_ip_rpm: int = 300  # pre-auth per-ip flood guard (all instances)
+    # Egress lockdown (see agenthook/egress/). When on, job containers run on an
+    # internal network (no internet) and reach only the broker; the model call is
+    # routed through the broker's credential-injecting gateway.
+    egress_enabled: bool = True
+    egress_network: str = "agenthook-egress-net"
+    egress_ctrl_port: int = 8079  # broker control plane, published to host loopback
+    egress_allow_default: list[str] = field(default_factory=list)  # extra hosts every job may reach
     # Management API (control-plane, /admin/*). Protected by a bearer token and,
     # by default, bound to loopback only — remote access is an explicit opt-in.
     admin_token: str = ""  # bearer for /admin/*; auto-generated if empty

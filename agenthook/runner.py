@@ -42,6 +42,7 @@ class RunContext:
     prompt: str = ""
     log_path: Path | None = None
     on_text: object = None  # callback(str) for live streaming, or None
+    egress: object = None  # EgressGrant when egress lockdown is active, else None
     _buffer: list[str] = field(default_factory=list)
 
     def log(self, msg: str) -> None:
@@ -90,6 +91,7 @@ def run_job(job: Job, *, log_cb: LogFn | None = None, on_text=None) -> Job:
 
     try:
         _validate_auth(ctx)
+        _setup_egress(ctx)
         _prepare_workspace(ctx)
         _execute_with_retries(ctx)
     except InstancePaused:
@@ -603,6 +605,73 @@ def container_name(job: Job) -> str:
     return f"agenthook-{job.id}-{job.attempts}"
 
 
+# --- Egress lockdown (see agenthook/egress/) --------------------------------
+
+
+def _setup_egress(ctx: RunContext) -> None:
+    """When egress lockdown is on and we run in Docker, ensure the broker is up,
+    mint a per-job token, register the model route + allowlist, and stash the
+    grant on ``ctx``. Fail-closed: any failure here aborts the job rather than
+    letting it run with unrestricted egress."""
+    import secrets as _pysecrets
+
+    from . import egress as egress_mod
+
+    if not (ctx.cfg.use_docker and getattr(ctx.cfg, "egress_enabled", False)):
+        return
+    from .egress.config_names import BROKER_ALIAS, GW_PORT
+
+    net = ctx.cfg.egress_network
+    ctrl = ctx.cfg.egress_ctrl_port
+    egress_mod.ensure_broker(net, ctrl_host_port=ctrl)
+
+    token = _pysecrets.token_urlsafe(24)
+    model = ctx.engine.egress_model(ctx.env_all)
+    allow = list(getattr(ctx.cfg, "egress_allow_default", []) or [])
+    allow += ctx.inst.egress_allow()
+    container_env: dict[str, str] = {}
+    strip: list[str] = []
+    if model is not None:
+        allow.append(model.host)
+        gw_base = f"http://{BROKER_ALIAS}:{GW_PORT}/{token}"
+        container_env[model.base_url_env] = gw_base
+        if model.key_env:
+            container_env[model.key_env] = model.dummy_value  # dummy; real key stays host-side
+            strip.append(model.key_env)
+        egress_mod.register(
+            ctrl, token,
+            upstream=f"https://{model.host}",
+            header=model.inject_header,
+            value=model.inject_value,
+            allow=allow,
+        )
+    else:
+        # No model routing: still register the token so the forward proxy has an
+        # allowlist for any operator-declared hosts.
+        egress_mod.register(
+            ctrl, token, upstream="", header="authorization", value="", allow=allow
+        )
+    # Force any stray HTTP client through the forward proxy (belt-and-suspenders;
+    # the internal network already blocks direct egress).
+    proxy = f"http://{token}:@{BROKER_ALIAS}:{GW_PORT}"
+    container_env.update({"HTTP_PROXY": proxy, "HTTPS_PROXY": proxy,
+                          "NO_PROXY": f"{BROKER_ALIAS},localhost,127.0.0.1"})
+    ctx.egress = egress_mod.EgressGrant(
+        token=token, network=net, allow=allow,
+        container_env=container_env, strip_env=strip,
+    )
+    ctx.log(f"egress: locked to {sorted(set(allow))} via broker token …{token[-6:]}")
+
+
+def _teardown_egress(ctx: RunContext) -> None:
+    if ctx.egress is None:
+        return
+    from . import egress as egress_mod
+
+    egress_mod.deregister(ctx.cfg.egress_ctrl_port, ctx.egress.token)
+    ctx.egress = None
+
+
 def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     # No -i: this is a headless capture. Keeping STDIN open made the engine wait
     # on the inherited terminal stdin (it never sees EOF), hanging forever — the
@@ -611,6 +680,12 @@ def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
     import os
 
     cmd = ["docker", "run", "--rm", "--name", container_name(ctx.job)]
+    # Egress lockdown: put the job on the internal network (no route to the
+    # internet — only the broker is reachable). Without a grant we keep Docker's
+    # default bridge (egress disabled / non-docker dev).
+    grant = ctx.egress
+    if grant is not None:
+        cmd += ["--network", grant.network]
     # Run as the host user (non-root): Claude refuses --dangerously-skip-permissions
     # as root, and matching the host uid keeps the mounted auth/workspace readable.
     if hasattr(os, "getuid"):
@@ -628,8 +703,14 @@ def _docker_wrap(ctx: RunContext, argv: list[str]) -> list[str]:
         cmd += ["-v", f"{_auth_dir(ctx)}:/agenthook-auth"]
         for k in auth_env:
             cmd += ["-e", f"{k}=/agenthook-auth"]
+    strip = set(grant.strip_env) if grant is not None else set()
     for k, v in ctx.env_all.items():
+        if k in strip:
+            continue  # real credential is injected host-side by the broker, not here
         cmd += ["-e", f"{k}={v}"]
+    if grant is not None:
+        for k, v in grant.container_env.items():
+            cmd += ["-e", f"{k}={v}"]
     limits = ctx.inst.limits if isinstance(ctx.inst.limits, dict) else {}
     if limits.get("cpus"):
         cmd += ["--cpus", str(limits["cpus"])]
@@ -756,6 +837,8 @@ def _finalize(ctx: RunContext) -> None:
     job = ctx.job
     job.finished_at = time.time()
     store.save_job(job)
+
+    _teardown_egress(ctx)
 
     retention = ctx.cfg.retention
     prompt_full = output_full = None
