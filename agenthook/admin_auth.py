@@ -18,9 +18,19 @@ import hmac
 import ipaddress
 import os
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import load_config
+
+# Declared security scheme so OpenAPI/Swagger renders an "Authorize" button for
+# ``/admin/*``. ``auto_error=False`` keeps require_admin the sole owner of the
+# 401 (and lets the loopback check run first); enforcement is unchanged — this
+# only teaches Swagger to attach the bearer header.
+_bearer = HTTPBearer(
+    auto_error=False,
+    description="admin token (config.admin_token / AGENTHOOK_ADMIN_TOKEN)",
+)
 
 _LOOPBACK_HOSTS = {"localhost", "testclient"}
 
@@ -42,10 +52,15 @@ def _admin_token() -> str:
     return os.environ.get("AGENTHOOK_ADMIN_TOKEN") or load_config().admin_token
 
 
-def require_admin(request: Request) -> None:
+def require_admin(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> None:
     """FastAPI dependency: enforce the network + token gates for ``/admin/*``.
 
-    Raises 403 from a disallowed network, 401 on a missing/invalid token.
+    Raises 403 from a disallowed network, 401 on a missing/invalid token. The
+    token is read from the declared bearer scheme (so Swagger's Authorize works);
+    ``credentials`` is None when the header is absent or not ``Bearer``.
     """
     cfg = load_config()
     client_ip = request.client.host if request.client else None
@@ -53,9 +68,8 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="admin API is loopback-only")
 
     expected = _admin_token()
-    header = request.headers.get("authorization", "")
-    scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not token or not expected:
+    token = credentials.credentials if credentials else ""
+    if not token or not expected:
         raise HTTPException(status_code=401, detail="missing or invalid admin token")
     if not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="missing or invalid admin token")
