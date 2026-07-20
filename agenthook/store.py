@@ -115,6 +115,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}  # r[1] = column name
     if "description" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN description TEXT DEFAULT ''")
+    # Native-UI admin accounts (human auth plane; see admin_users.py). The machine
+    # plane (Workspace/API) does not use this — it authenticates via admin_auth.py.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS admin_users ("
+        "username TEXT PRIMARY KEY, pw_hash TEXT NOT NULL, "
+        "totp_secret TEXT, created_at REAL NOT NULL)"
+    )
 
 
 def init_db() -> None:

@@ -30,6 +30,7 @@ jobs_app = typer.Typer(help="Inspect jobs")
 sessions_app = typer.Typer(help="Inspect sessions")
 service_app = typer.Typer(help="Control the systemd daemon")
 skill_app = typer.Typer(help="Manage an instance's skills")
+admin_app = typer.Typer(help="Manage native-UI admin accounts (human login plane)")
 app.add_typer(instance_app, name="instance")
 instance_app.add_typer(repo_app, name="repo")
 app.add_typer(env_app, name="env")
@@ -37,12 +38,97 @@ app.add_typer(jobs_app, name="jobs")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(service_app, name="service")
 app.add_typer(skill_app, name="skill")
+app.add_typer(admin_app, name="admin")
 
 console = Console()
 
 
 def _err(msg: str) -> None:
     console.print(f"[bold red]error:[/] {msg}")
+
+
+# --- native-UI admin accounts (human login plane) ---------------------------
+
+
+@admin_app.command("create-user")
+def admin_create_user(
+    username: str = typer.Argument(..., help="admin username for the native UI"),
+    password: str = typer.Option(
+        ..., prompt=True, hide_input=True, confirmation_prompt=True, help="password (prompted)"
+    ),
+) -> None:
+    """Create the native-UI admin account (bootstrap; no unauthenticated web wizard)."""
+    from . import admin_users
+
+    try:
+        admin_users.create_user(username, password)
+    except ValueError as exc:
+        _err(str(exc))
+        raise typer.Exit(1)
+    console.print(
+        f"[green]created[/] admin user {username!r}. Enable MFA with: "
+        f"agenthook admin enroll-totp {username}"
+    )
+
+
+@admin_app.command("reset-password")
+def admin_reset_password(
+    username: str = typer.Argument(...),
+    password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True),
+) -> None:
+    """Reset a password (the SMTP-free recovery path — you own the host)."""
+    from . import admin_users
+
+    try:
+        admin_users.set_password(username, password)
+    except ValueError as exc:
+        _err(str(exc))
+        raise typer.Exit(1)
+    console.print(f"[green]password updated[/] for {username!r}")
+
+
+@admin_app.command("list-users")
+def admin_list_users() -> None:
+    from . import admin_users
+
+    users = admin_users.list_users()
+    if not users:
+        console.print("no admin users — create one: agenthook admin create-user <name>")
+        return
+    t = Table("username", "TOTP", "created")
+    for u in users:
+        t.add_row(u.username, "on" if u.totp_enabled else "off", time.strftime("%Y-%m-%d", time.localtime(u.created_at)))
+    console.print(t)
+
+
+@admin_app.command("delete-user")
+def admin_delete_user(username: str = typer.Argument(...)) -> None:
+    from . import admin_users
+
+    admin_users.delete_user(username)
+    console.print(f"[green]deleted[/] {username!r}")
+
+
+@admin_app.command("enroll-totp")
+def admin_enroll_totp(username: str = typer.Argument(...)) -> None:
+    """Generate a TOTP secret and attach it (add it to your authenticator app)."""
+    from . import admin_users
+
+    if admin_users.get_user(username) is None:
+        _err(f"admin user {username!r} not found")
+        raise typer.Exit(1)
+    secret = admin_users.generate_totp_secret()
+    admin_users.set_totp_secret(username, secret)
+    uri = f"otpauth://totp/agenthook:{username}?secret={secret}&issuer=agenthook"
+    console.print(Panel(f"secret: [bold]{secret}[/]\n\notpauth URI:\n{uri}", title="TOTP enrolled"))
+
+
+@admin_app.command("disable-totp")
+def admin_disable_totp(username: str = typer.Argument(...)) -> None:
+    from . import admin_users
+
+    admin_users.set_totp_secret(username, None)
+    console.print(f"[green]TOTP disabled[/] for {username!r}")
     raise typer.Exit(1)
 
 
