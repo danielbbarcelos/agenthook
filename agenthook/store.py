@@ -127,6 +127,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "id TEXT PRIMARY KEY, username TEXT NOT NULL, csrf TEXT NOT NULL, "
         "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
     )
+    if "email" not in {r[1] for r in conn.execute("PRAGMA table_info(admin_users)")}:
+        conn.execute("ALTER TABLE admin_users ADD COLUMN email TEXT")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS admin_reset_tokens ("
+        "token TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at REAL NOT NULL)"
+    )
 
 
 def init_db() -> None:

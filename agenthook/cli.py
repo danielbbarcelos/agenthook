@@ -56,12 +56,13 @@ def admin_create_user(
     password: str = typer.Option(
         ..., prompt=True, hide_input=True, confirmation_prompt=True, help="password (prompted)"
     ),
+    email: Optional[str] = typer.Option(None, "--email", help="email for password recovery (needs SMTP)"),
 ) -> None:
     """Create the native-UI admin account (bootstrap; no unauthenticated web wizard)."""
     from . import admin_users
 
     try:
-        admin_users.create_user(username, password)
+        admin_users.create_user(username, password, email)
     except ValueError as exc:
         _err(str(exc))
         raise typer.Exit(1)
@@ -69,6 +70,22 @@ def admin_create_user(
         f"[green]created[/] admin user {username!r}. Enable MFA with: "
         f"agenthook admin enroll-totp {username}"
     )
+
+
+@admin_app.command("set-email")
+def admin_set_email(
+    username: str = typer.Argument(...),
+    email: str = typer.Argument(..., help="recovery email (empty string to clear)"),
+) -> None:
+    """Set (or clear) the recovery email used for SMTP password recovery."""
+    from . import admin_users
+
+    try:
+        admin_users.set_email(username, email or None)
+    except ValueError as exc:
+        _err(str(exc))
+        raise typer.Exit(1)
+    console.print(f"[green]email updated[/] for {username!r}")
 
 
 @admin_app.command("reset-password")

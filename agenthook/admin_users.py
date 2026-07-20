@@ -89,34 +89,43 @@ def verify_totp(secret_b32: str, code: str, *, now: float | None = None, window:
 # --- user store -------------------------------------------------------------
 
 
+_COLS = "username, pw_hash, totp_secret, created_at, email"
+
+
 @dataclass
 class AdminUser:
     username: str
     pw_hash: str
     totp_secret: str | None
     created_at: float
+    email: str | None = None
 
     @property
     def totp_enabled(self) -> bool:
         return bool(self.totp_secret)
 
 
-def create_user(username: str, password: str) -> None:
+def create_user(username: str, password: str, email: str | None = None) -> None:
     with _conn() as c:
         if c.execute("SELECT 1 FROM admin_users WHERE username=?", (username,)).fetchone():
             raise ValueError(f"admin user {username!r} already exists")
         c.execute(
-            "INSERT INTO admin_users(username, pw_hash, totp_secret, created_at) VALUES(?,?,?,?)",
-            (username, hash_password(password), None, time.time()),
+            "INSERT INTO admin_users(username, pw_hash, totp_secret, created_at, email) VALUES(?,?,?,?,?)",
+            (username, hash_password(password), None, time.time(), email),
         )
 
 
 def get_user(username: str) -> AdminUser | None:
     with _conn() as c:
-        row = c.execute(
-            "SELECT username, pw_hash, totp_secret, created_at FROM admin_users WHERE username=?", (username,)
-        ).fetchone()
+        row = c.execute(f"SELECT {_COLS} FROM admin_users WHERE username=?", (username,)).fetchone()
     return AdminUser(*row) if row else None
+
+
+def set_email(username: str, email: str | None) -> None:
+    with _conn() as c:
+        cur = c.execute("UPDATE admin_users SET email=? WHERE username=?", (email, username))
+        if cur.rowcount == 0:
+            raise ValueError(f"admin user {username!r} not found")
 
 
 def set_password(username: str, password: str) -> None:
@@ -140,10 +149,37 @@ def delete_user(username: str) -> None:
 
 def list_users() -> list[AdminUser]:
     with _conn() as c:
-        rows = c.execute(
-            "SELECT username, pw_hash, totp_secret, created_at FROM admin_users ORDER BY username"
-        ).fetchall()
+        rows = c.execute(f"SELECT {_COLS} FROM admin_users ORDER BY username").fetchall()
     return [AdminUser(*r) for r in rows]
+
+
+# --- password-reset tokens (email recovery) ---------------------------------
+
+
+def create_reset_token(username: str, *, ttl_seconds: int = 900) -> str:
+    """Mint a single-use password-reset token for ``username`` (default 15 min)."""
+    import secrets as _secrets
+
+    token = _secrets.token_urlsafe(32)
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO admin_reset_tokens(token, username, expires_at) VALUES(?,?,?)",
+            (token, username, time.time() + ttl_seconds),
+        )
+    return token
+
+
+def consume_reset_token(token: str, *, now: float | None = None) -> str | None:
+    """Return the username for a valid token and delete it (single-use); None if
+    unknown or expired."""
+    now = time.time() if now is None else now
+    with _conn() as c:
+        row = c.execute("SELECT username, expires_at FROM admin_reset_tokens WHERE token=?", (token,)).fetchone()
+        if row is None:
+            return None
+        c.execute("DELETE FROM admin_reset_tokens WHERE token=?", (token,))
+        username, expires_at = row
+        return username if expires_at > now else None
 
 
 def count_users() -> int:

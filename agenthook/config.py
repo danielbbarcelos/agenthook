@@ -58,6 +58,15 @@ class Config:
     # Workspace/API (machine plane); then /ui is not served and session auth is off.
     native_ui: bool = True
     admin_session_idle_min: int = 30  # sliding idle timeout for a UI login session
+    # SMTP (optional) — unlocks email-based password recovery for the native UI.
+    # Without it, recovery is the CLI (`agenthook admin reset-password`). Password
+    # via env AGENTHOOK_SMTP_PASSWORD, else smtp_password.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

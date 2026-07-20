@@ -197,6 +197,47 @@ def _register_ui_auth(app: FastAPI) -> None:
             return JSONResponse({"authenticated": False}, status_code=401)
         return {"authenticated": True, "username": sess.username, "csrf": sess.csrf}
 
+    @app.post("/ui/recover")
+    async def ui_recover(request: Request):
+        ip = request.client.host if request.client else "?"
+        ok, retry = ratelimit.check(f"recover:{ip}", ratelimit.Limit(5, 3))
+        if not ok:
+            return _rate_limited(retry)
+        username = str(_json(await request.body()).get("username", ""))
+        cfg = load_config()
+        # Best-effort and constant-shape: never reveal whether the user/email/SMTP
+        # exists. Emails only when SMTP is configured and the user has an address.
+        try:
+            from . import mailer
+
+            u = admin_users.get_user(username)
+            if u and u.email and mailer.is_configured(cfg):
+                token = admin_users.create_reset_token(username)
+                link = f"{cfg.public_base_url.rstrip('/')}/ui/#reset?token={token}"
+                mailer.send(
+                    u.email,
+                    "agenthook password reset",
+                    f"Reset your password (valid 15 min):\n{link}\n\nToken: {token}",
+                    cfg=cfg,
+                )
+        except Exception:  # noqa: BLE001 - never leak send/lookup failures
+            pass
+        return JSONResponse({"ok": True})
+
+    @app.post("/ui/recover/confirm")
+    async def ui_recover_confirm(request: Request):
+        payload = _json(await request.body())
+        token = str(payload.get("token", ""))
+        password = str(payload.get("password", ""))
+        if not token or not password:
+            return JSONResponse({"error": "token and password required"}, status_code=400)
+        username = admin_users.consume_reset_token(token)
+        if not username:
+            return JSONResponse({"error": "invalid or expired token"}, status_code=400)
+        admin_users.set_password(username, password)
+        admin_sessions.delete_for_user(username)  # a reset revokes existing sessions
+        return JSONResponse({"ok": True})
+
 
 def _mount_panel(app: FastAPI) -> None:
     """Serve the built React panel at ``/ui`` when present.
