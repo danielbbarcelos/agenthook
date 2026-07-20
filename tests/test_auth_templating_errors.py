@@ -56,6 +56,49 @@ def test_prompt_precedence(instance):
     assert templating.resolve_prompt(inst, {}, ctx) == "DEFAULT"
 
 
+def test_instructions_layer_wraps_prompt_via_placeholder(instance):
+    """The request_type template is the project-default instructions layer; when
+    it references {{ prompt }} it positions the (literal) task itself."""
+    inst = instance
+    inst.templates = {"ticket": "Responda {{ requester.name }} em {{ language }}.\nTarefa: {{ prompt }}"}
+    save(inst)
+    req = {"request_type": "ticket", "prompt": "corrige o bug", "requester": {"name": "Daniel"}, "language": "pt-BR"}
+    ctx = templating.build_context(req, {})
+    out = templating.resolve_prompt(inst, req, ctx)
+    assert out == "Responda Daniel em pt-BR.\nTarefa: corrige o bug"
+
+
+def test_instructions_layer_appends_task_when_no_placeholder(instance):
+    """A layer that doesn't reference {{ prompt }} gets the task appended as a
+    delimited block — ticket text stays separated from instructions."""
+    inst = instance
+    inst.templates = {"ticket": "Responda {{ requester.name }} em {{ language }}."}
+    save(inst)
+    req = {"request_type": "ticket", "prompt": "corrige o bug", "requester": {"name": "Daniel"}, "language": "pt-BR"}
+    ctx = templating.build_context(req, {})
+    out = templating.resolve_prompt(inst, req, ctx)
+    assert out.startswith("Responda Daniel em pt-BR.")
+    assert "<<<TASK" in out and out.rstrip().endswith("TASK")
+    assert "corrige o bug" in out
+
+
+def test_request_instructions_override_the_template(instance):
+    """A per-request `instructions` overrides the request_type template."""
+    inst = instance
+    inst.templates = {"ticket": "PROJECT DEFAULT for {{ requester.name }}"}
+    save(inst)
+    req = {
+        "request_type": "ticket",
+        "instructions": "Tom formal para {{ requester.name }}. Tarefa: {{ prompt }}",
+        "prompt": "revisa o PR",
+        "requester": {"name": "Ana"},
+    }
+    ctx = templating.build_context(req, {})
+    out = templating.resolve_prompt(inst, req, ctx)
+    assert out == "Tom formal para Ana. Tarefa: revisa o PR"
+    assert "PROJECT DEFAULT" not in out
+
+
 def test_context_excludes_secrets(instance):
     inst = instance
     inst.context_template = "p={{ env.PUB }} s={{ env.get('SEC','') }}"
