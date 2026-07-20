@@ -1,4 +1,4 @@
-import { clearToken, getToken } from "./auth";
+import { clearCsrf, getCsrf, setCsrf } from "./auth";
 import type {
   AuditRow,
   Config,
@@ -28,20 +28,23 @@ type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
-  const token = getToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  // Auth rides the HttpOnly session cookie; unsafe methods must also carry the
+  // session's CSRF token (cookies are auto-sent, this header is not).
+  const csrf = getCsrf();
+  if (csrf && method !== "GET") headers["X-Agenthook-CSRF"] = csrf;
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await fetch(path, {
     method,
     headers,
+    credentials: "include",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
   if (res.status === 401) {
-    clearToken();
+    clearCsrf();
     if (!location.hash.includes("/login")) location.assign("/ui/#/login");
-    throw new ApiError(401, "unauthorized — admin token rejected");
+    throw new ApiError(401, "unauthorized — please sign in again");
   }
 
   if (!res.ok) {
@@ -60,8 +63,42 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  // auth probe — used by the login screen
-  ping: () => request<InstanceSummary[]>("GET", "/admin/instances"),
+  // native-UI session auth (human plane)
+  login: async (username: string, password: string, totp?: string): Promise<{ username: string; csrf: string }> => {
+    const res = await fetch("/ui/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, ...(totp ? { totp } : {}) }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, (data?.error as string) ?? "login failed");
+    }
+    const data = await res.json();
+    setCsrf(data.csrf);
+    return data;
+  },
+  logout: async (): Promise<void> => {
+    try {
+      await fetch("/ui/logout", { method: "POST", credentials: "include" });
+    } catch {
+      /* best-effort */
+    }
+    clearCsrf();
+  },
+  // rehydrate an existing cookie session (e.g. after a page reload cleared csrf)
+  session: async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/ui/session", { credentials: "include" });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data?.csrf) setCsrf(data.csrf);
+      return !!data?.authenticated;
+    } catch {
+      return false;
+    }
+  },
 
   // liveness — public endpoint, drives the sidebar server status chip
   health: async (): Promise<{ ok: boolean }> => {

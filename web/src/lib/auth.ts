@@ -1,18 +1,22 @@
-// Admin token kept in sessionStorage (cleared when the tab closes). The token
-// is sent as a bearer header on every /admin request. The panel must run on
-// localhost — the server's loopback gate refuses non-127.0.0.1 callers unless
-// admin_remote is enabled.
+// Session-based auth for the native UI. The session itself is an HttpOnly cookie
+// (invisible to JS) set by POST /ui/login; here we keep only the CSRF token, which
+// the API layer echoes in X-Agenthook-CSRF on unsafe requests. The panel must run
+// on localhost unless admin_remote is enabled server-side.
 
-const KEY = "agenthook.adminToken";
+const CSRF_KEY = "agenthook.csrf";
 
-export function getToken(): string | null {
-  return sessionStorage.getItem(KEY);
+export function getCsrf(): string | null {
+  return sessionStorage.getItem(CSRF_KEY);
 }
 
-export function setToken(token: string): void {
-  sessionStorage.setItem(KEY, token);
+export function setCsrf(csrf: string): void {
+  sessionStorage.setItem(CSRF_KEY, csrf);
 }
 
-export function clearToken(): void {
-  sessionStorage.removeItem(KEY);
+export function clearCsrf(): void {
+  sessionStorage.removeItem(CSRF_KEY);
+}
+
+export function isAuthed(): boolean {
+  return !!sessionStorage.getItem(CSRF_KEY);
 }

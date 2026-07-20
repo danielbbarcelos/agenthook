@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { clearToken } from "@/lib/auth";
 import { type Theme, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -204,7 +203,7 @@ function SidebarBody({
                 size="icon"
                 className="w-full text-muted-foreground"
                 onClick={() => {
-                  clearToken();
+                  void api.logout();
                   location.assign("/ui/#/login");
                 }}
               >
@@ -221,7 +220,7 @@ function SidebarBody({
               size="sm"
               className="text-muted-foreground"
               onClick={() => {
-                clearToken();
+                void api.logout();
                 location.assign("/ui/#/login");
               }}
             >

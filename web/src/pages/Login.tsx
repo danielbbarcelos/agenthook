@@ -6,11 +6,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
-import { setToken } from "@/lib/auth";
 
 export function Login() {
   const nav = useNavigate();
-  const [token, setTok] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -18,16 +20,20 @@ export function Login() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setToken(token.trim());
     try {
-      await api.ping();
+      await api.login(username.trim(), password, needTotp ? totp.trim() : undefined);
       nav("/", { replace: true });
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.status === 403
-          ? "This agenthook only answers localhost. Open the panel on the same machine, or set admin_remote: true in config.yaml."
-          : "That token didn't work. Check admin_token in config.yaml and try again.",
-      );
+      if (err instanceof ApiError && err.message === "totp_required") {
+        setNeedTotp(true);
+        setError("Enter the code from your authenticator app.");
+      } else if (err instanceof ApiError && err.status === 403) {
+        setError(
+          "This agenthook only answers localhost. Open the panel on the same machine, or set admin_remote in config.yaml.",
+        );
+      } else {
+        setError("Invalid username or password.");
+      }
       setBusy(false);
     }
   }
@@ -41,33 +47,52 @@ export function Login() {
         <Card>
           <CardContent className="pt-6">
             <h1 className="text-lg font-bold tracking-tight">Sign in</h1>
-            <p className="mb-5 mt-1 text-sm text-muted-foreground">
-              Paste your admin token to manage this agenthook.
-            </p>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">Sign in to manage this agenthook.</p>
             <form onSubmit={submit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="token">Admin token</Label>
+                <Label htmlFor="username">Username</Label>
                 <Input
-                  id="token"
-                  type="password"
+                  id="username"
                   autoFocus
-                  autoComplete="off"
-                  value={token}
-                  onChange={(e) => setTok(e.target.value)}
-                  placeholder="••••••••••••••••"
-                  className="font-mono"
+                  autoComplete="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              {needTotp && (
+                <div className="space-y-2">
+                  <Label htmlFor="totp">Authenticator code</Label>
+                  <Input
+                    id="totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={totp}
+                    onChange={(e) => setTotp(e.target.value)}
+                    placeholder="123456"
+                    className="font-mono"
+                  />
+                </div>
+              )}
               {error && <p className="text-sm text-destructive">{error}</p>}
-              <Button type="submit" className="w-full" disabled={!token.trim() || busy}>
-                {busy ? "Checking…" : "Sign in"}
+              <Button type="submit" className="w-full" disabled={!username.trim() || !password || busy}>
+                {busy ? "Signing in…" : "Sign in"}
               </Button>
             </form>
           </CardContent>
         </Card>
         <p className="mt-4 text-center text-xs text-muted-foreground">
-          Find it with{" "}
-          <code className="font-mono text-foreground">grep admin_token ~/.agenthook/config.yaml</code>
+          No account yet? Create one on the host:{" "}
+          <code className="font-mono text-foreground">agenthook admin create-user &lt;name&gt;</code>
         </p>
       </div>
     </div>
