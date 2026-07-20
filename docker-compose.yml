@@ -1,0 +1,44 @@
+# agenthook control-plane — Docker-out-of-Docker (DooD).
+#
+# The server runs in this container but spawns the per-job runner + egress
+# containers on the HOST daemon via the mounted socket. Two invariants make
+# DooD correct here:
+#
+#   1. host networking — the egress broker publishes its control port on the
+#      host's 127.0.0.1, and the server binds loopback for the reverse proxy;
+#      both assume "127.0.0.1 == the host", which host networking provides.
+#   2. matched state path — AGENTHOOK_HOME is bind-mounted at the SAME absolute
+#      path inside and outside the container, so job worktrees the server creates
+#      (e.g. $AGENTHOOK_DATA/work/<job>) resolve identically on the host daemon.
+#
+# Prereqs on the host — build the two job images once:
+#   docker build -t agenthook/runner:latest agenthook/docker
+#   docker build -t agenthook/egress:latest agenthook/egress
+#
+# Put a TLS reverse proxy (see deploy/) in front of 127.0.0.1:8080, exposing
+# only /hook, /healthz, and (IP-restricted) /admin. Set AGENTHOOK_DATA to pick
+# the host state directory (default /opt/agenthook/data).
+
+services:
+  agenthook:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.control-plane
+    image: agenthook/control-plane:latest
+    network_mode: host
+    environment:
+      AGENTHOOK_HOME: ${AGENTHOOK_DATA:-/opt/agenthook/data}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AGENTHOOK_DATA:-/opt/agenthook/data}:${AGENTHOOK_DATA:-/opt/agenthook/data}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

@@ -1,0 +1,20 @@
+# Keep the control-plane build context lean.
+.git
+.venv
+venv
+web/node_modules
+web/dist
+dist
+build
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+# The panel is built inside the image (stage 1) and copied from there, so any
+# host-built copy is irrelevant to the build context.
+agenthook/static/panel
+tests
+docs
+design-system
+*.md
+!README.md

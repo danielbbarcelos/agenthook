@@ -1,0 +1,46 @@
+# agenthook control-plane image — the webhook + management server.
+#
+# Multi-stage: (1) build the React panel with node; (2) a slim Python runtime
+# that carries the docker CLI so the server can spawn the runner/egress
+# containers on the HOST daemon (Docker-out-of-Docker — see ../docker-compose.yml).
+#
+# Build/run via the compose file at the repo root:  docker compose up -d --build
+
+# --- stage 1: web panel -----------------------------------------------------
+FROM node:20-slim AS panel
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+# vite emits into ../agenthook/static/panel (see web/vite.config.ts)
+RUN npm run build
+
+# --- stage 2: python runtime + docker CLI -----------------------------------
+FROM python:3.12-slim
+
+# docker CLI only (not the daemon) — it talks to the mounted host socket.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY agenthook/ ./agenthook/
+# the panel built in stage 1 (git-ignored on the host, so it comes from the build)
+COPY --from=panel /app/agenthook/static/panel ./agenthook/static/panel
+RUN pip install --no-cache-dir .
+
+# State root. The compose file bind-mounts the SAME host path here, so the
+# per-job worktrees the server creates resolve identically on the host daemon.
+ENV AGENTHOOK_HOME=/opt/agenthook/data
+
+# Bind loopback: a TLS reverse proxy (see deploy/) is the only public face.
+EXPOSE 8080
+CMD ["agenthook", "serve", "--host", "127.0.0.1", "--port", "8080"]
