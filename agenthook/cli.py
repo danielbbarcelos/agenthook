@@ -880,8 +880,21 @@ def audit_cmd(
 # --- helpers ----------------------------------------------------------------
 
 
+def _version_cb(value: bool) -> None:
+    if value:
+        from . import __version__
+
+        typer.echo(f"agenthook {__version__}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context):
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version", callback=_version_cb, is_eager=True, help="Show version and exit"
+    ),
+) -> None:
     if ctx.invoked_subcommand is None:
         tui.main_menu()
 
