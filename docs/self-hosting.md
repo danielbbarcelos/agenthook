@@ -17,9 +17,37 @@ Workspace (SaaS) ──HTTPS──► seu reverse-proxy TLS ──► Agenthook 
                                                           └─► egress broker
 ```
 
-## 0. Pré-requisitos
-- **Docker** + **docker compose** na máquina.
-- Um domínio/subdomínio apontando para a máquina (para o TLS), ex.: `hooks.seu-dominio.com`.
+## 0. Requisitos de servidor
+
+**Software**
+- **Linux** (kernel ~5.x+), com **Docker Engine** (28.x+) + **docker compose v2**.
+- Um **domínio/subdomínio** apontando para a máquina (para o TLS), ex.: `hooks.seu-dominio.com`.
+- **Reverse proxy TLS** — Caddy (auto-TLS) ou nginx (exemplos em `deploy/`).
+
+**Hardware** — o peso real é o **container de job**: cada job roda o CLI do agente e
+consome CPU/RAM. A concorrência padrão é **2 jobs simultâneos por instância**
+(`default_concurrency`), e cada instância ativa soma.
+
+| Recurso | Mínimo | Confortável |
+|---|---|---|
+| vCPU | 2 | 4 |
+| RAM | 4 GB | 8 GB+ (escala com jobs simultâneos) |
+| Disco | 20 GB | 40 GB+ SSD |
+
+Uso do disco: imagens (~1.1 GB — runner 700 MB + control-plane 277 MB + egress 119 MB)
++ estado em `AGENTHOOK_DATA` (SQLite + repos clonados + um worktree por job + logs). Repos
+grandes e muitos jobs pesam. Sem jobs, o Agenthook é leve; o pico é durante os jobs.
+
+**Rede / portas**
+- **Entrada pública** (via reverse proxy TLS): só `/hook/*`, `/healthz` e — restrito ao **IP
+  de egress do Workspace** — `/admin/*`.
+- **App interno:** loopback `127.0.0.1:8080`. **Broker de egress:** loopback `127.0.0.1:8079`.
+- **Saída (outbound)** a liberar: API do modelo (Anthropic), `github.com`, host do banco (se a
+  instância usa DB) e o Workspace (callbacks). O egress lockdown já restringe o container de
+  job a uma allowlist.
+
+> Referência: um **VPS de 4 vCPU / 8 GB / 40 GB SSD** roda confortavelmente um cliente com
+> poucas instâncias e 2–4 jobs simultâneos.
 
 ## 1. Buildar as imagens de job (uma vez)
 O control-plane cria containers de job no daemon do host — essas imagens precisam existir:
