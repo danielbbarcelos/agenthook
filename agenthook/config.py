@@ -49,8 +49,11 @@ class Config:
     egress_allow_default: list[str] = field(default_factory=list)  # extra hosts every job may reach
     # Management API (control-plane, /admin/*). Protected by a bearer token and,
     # by default, bound to loopback only — remote access is an explicit opt-in.
-    admin_token: str = ""  # bearer for /admin/*; auto-generated if empty
+    admin_token: str = ""  # bearer for /admin/*; auto-generated if empty. Also the
+    # HS256 signing secret for short-lived admin JWTs (see admin_auth.py).
     admin_remote: bool = False  # allow /admin/* from non-loopback clients
+    admin_ip_allow: list[str] = field(default_factory=list)  # optional CIDR allowlist
+    # for remote /admin/* (e.g. the Workspace backend's egress IP); loopback always ok
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

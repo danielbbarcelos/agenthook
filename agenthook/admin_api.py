@@ -35,6 +35,13 @@ from .instances import Instance, InstanceError
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
+@router.get("/ping")
+def ping():
+    """Cheap authenticated whoami: a 200 means the network + credential gates
+    passed. The Workspace uses it to test a server's base_url + token/JWT."""
+    return {"ok": True}
+
+
 # --- helpers ----------------------------------------------------------------
 
 
