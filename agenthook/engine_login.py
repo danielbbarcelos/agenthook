@@ -39,6 +39,7 @@ _AUTH_MOUNT = "/agenthook-auth"
 _SESSION_TTL_S = 300.0  # abandoned logins are reaped after 5 min
 _URL_TIMEOUT_S = 45.0  # wait for the authorize URL to appear
 _CODE_TIMEOUT_S = 60.0  # wait for the token after the code is submitted
+_SUBMIT_SETTLE_S = 0.4  # gap so the pasted code and the Enter (CR) read as distinct events
 
 # The login runs as a full-screen TUI: a very wide PTY keeps the URL/token on a
 # single logical line (the default 80 cols wraps them), and we strip ANSI before
@@ -191,7 +192,16 @@ def submit_code(session_id: str, code: str) -> str:
     if not sess:
         raise LoginError("login session not found or expired — start again.")
     try:
-        os.write(sess.master_fd, (code.strip() + "\n").encode())
+        # The setup-token TUI (Ink, raw mode) only submits on a carriage return
+        # that arrives as its OWN input event. Two failure modes to avoid, both
+        # verified against `claude setup-token`: a line feed ("\n") is never read
+        # as Enter, and a CR glued onto the pasted code in one write is swallowed
+        # as paste text — either way the code sits unsubmitted in the box and the
+        # flow times out. So: write the code, let it register, then send a bare CR
+        # as a separate write.
+        os.write(sess.master_fd, code.strip().encode())
+        time.sleep(_SUBMIT_SETTLE_S)
+        os.write(sess.master_fd, b"\r")
     except OSError as exc:
         _kill(_SESSIONS.pop(session_id, None))
         raise LoginError(f"login process is gone: {exc}") from exc
