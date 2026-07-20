@@ -122,6 +122,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "username TEXT PRIMARY KEY, pw_hash TEXT NOT NULL, "
         "totp_secret TEXT, created_at REAL NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS admin_sessions ("
+        "id TEXT PRIMARY KEY, username TEXT NOT NULL, csrf TEXT NOT NULL, "
+        "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
+    )
 
 
 def init_db() -> None:

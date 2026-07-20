@@ -54,6 +54,10 @@ class Config:
     admin_remote: bool = False  # allow /admin/* from non-loopback clients
     admin_ip_allow: list[str] = field(default_factory=list)  # optional CIDR allowlist
     # for remote /admin/* (e.g. the Workspace backend's egress IP); loopback always ok
+    # Native UI (human login plane). Disable to manage the server only via the
+    # Workspace/API (machine plane); then /ui is not served and session auth is off.
+    native_ui: bool = True
+    admin_session_idle_min: int = 30  # sliding idle timeout for a UI login session
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

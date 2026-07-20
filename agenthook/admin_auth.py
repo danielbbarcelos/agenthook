@@ -152,9 +152,27 @@ def require_admin(
     if cfg.admin_remote and allow and not loopback and not (client_ip and _ip_allowed(client_ip, allow)):
         raise HTTPException(status_code=403, detail="admin API: client IP not allowed")
 
+    # Machine plane: bearer (short-lived JWT or the static token).
     secret = _admin_token()
     token = credentials.credentials if credentials else ""
-    if not token or not secret:
-        raise HTTPException(status_code=401, detail="missing or invalid admin credential")
-    if not _authenticate(token, secret):
-        raise HTTPException(status_code=401, detail="missing or invalid admin credential")
+    if token and secret and _authenticate(token, secret):
+        return
+
+    # Human plane: a valid native-UI session cookie (only when the UI is enabled).
+    # Cookies are auto-sent, so unsafe methods must also carry the session's CSRF
+    # token in a header — cross-site JS can't read it, which blocks forgery.
+    if getattr(cfg, "native_ui", True):
+        from . import admin_sessions
+
+        sid = request.cookies.get(admin_sessions.COOKIE_NAME)
+        if sid:
+            idle = getattr(cfg, "admin_session_idle_min", 30) * 60
+            sess = admin_sessions.get(sid, idle_seconds=idle)
+            if sess is not None:
+                if request.method not in ("GET", "HEAD", "OPTIONS"):
+                    csrf = request.headers.get(admin_sessions.CSRF_HEADER, "")
+                    if not csrf or not hmac.compare_digest(csrf, sess.csrf):
+                        raise HTTPException(status_code=403, detail="missing or invalid CSRF token")
+                return
+
+    raise HTTPException(status_code=401, detail="missing or invalid admin credential")

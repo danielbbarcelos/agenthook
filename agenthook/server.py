@@ -48,8 +48,10 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
 
-    # ---- web panel (built SPA, served at /ui if present) ----------------
-    _mount_panel(app)
+    # ---- native UI (human plane): login routes + panel, gated by config --
+    if load_config().native_ui:
+        _register_ui_auth(app)
+        _mount_panel(app)
 
     # ---- infra ----------------------------------------------------------
 
@@ -144,6 +146,56 @@ def create_app() -> FastAPI:
         return _decide(app, job_id, "reject", await _decision_token(request), request)
 
     return app
+
+
+def _register_ui_auth(app: FastAPI) -> None:
+    """Native-UI human login: password (+ TOTP) → server-side session cookie with
+    a CSRF token. Registered only when ``config.native_ui`` is on. The machine
+    plane (Workspace/API) does not use these — it authenticates via bearer."""
+    from . import admin_sessions, admin_users, ratelimit
+
+    @app.post("/ui/login")
+    async def ui_login(request: Request):
+        ip = request.client.host if request.client else "?"
+        ok, retry = ratelimit.check(f"login:{ip}", ratelimit.Limit(10, 5))
+        if not ok:
+            return _rate_limited(retry)
+        payload = _json(await request.body())
+        username = str(payload.get("username", ""))
+        password = str(payload.get("password", ""))
+        totp = payload.get("totp")
+        if not admin_users.authenticate(username, password, totp):
+            u = admin_users.get_user(username)
+            if u and u.totp_enabled and not totp and admin_users.verify_password(password, u.pw_hash):
+                return JSONResponse({"error": "totp_required"}, status_code=401)
+            return JSONResponse({"error": "invalid credentials"}, status_code=401)
+        cfg = load_config()
+        idle = cfg.admin_session_idle_min * 60
+        sess = admin_sessions.create(username, idle_seconds=idle)
+        resp = JSONResponse({"username": username, "csrf": sess.csrf})
+        resp.set_cookie(
+            admin_sessions.COOKIE_NAME, sess.id, max_age=idle, path="/",
+            httponly=True, samesite="strict", secure=(request.url.scheme == "https"),
+        )
+        return resp
+
+    @app.post("/ui/logout")
+    async def ui_logout(request: Request):
+        sid = request.cookies.get(admin_sessions.COOKIE_NAME)
+        if sid:
+            admin_sessions.delete(sid)
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(admin_sessions.COOKIE_NAME, path="/")
+        return resp
+
+    @app.get("/ui/session")
+    async def ui_session(request: Request):
+        cfg = load_config()
+        sid = request.cookies.get(admin_sessions.COOKIE_NAME)
+        sess = admin_sessions.get(sid, idle_seconds=cfg.admin_session_idle_min * 60) if sid else None
+        if sess is None:
+            return JSONResponse({"authenticated": False}, status_code=401)
+        return {"authenticated": True, "username": sess.username, "csrf": sess.csrf}
 
 
 def _mount_panel(app: FastAPI) -> None:

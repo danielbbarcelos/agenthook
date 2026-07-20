@@ -76,15 +76,18 @@ def admin_reset_password(
     username: str = typer.Argument(...),
     password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True),
 ) -> None:
-    """Reset a password (the SMTP-free recovery path — you own the host)."""
-    from . import admin_users
+    """Reset a password (the SMTP-free recovery path — you own the host).
+
+    Also revokes the user's existing login sessions."""
+    from . import admin_sessions, admin_users
 
     try:
         admin_users.set_password(username, password)
     except ValueError as exc:
         _err(str(exc))
         raise typer.Exit(1)
-    console.print(f"[green]password updated[/] for {username!r}")
+    admin_sessions.delete_for_user(username)
+    console.print(f"[green]password updated[/] for {username!r} (existing sessions revoked)")
 
 
 @admin_app.command("list-users")
