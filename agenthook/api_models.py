@@ -64,6 +64,23 @@ class EnvVarIn(BaseModel):
     secret: bool = False
 
 
+class RunIn(BaseModel):
+    """Ad-hoc control-plane run against an instance (the console playground).
+
+    Bypasses the webhook auth — the admin JWT already proves control-plane
+    authority — and, unlike ``/hook``, honors an explicit ``deliverable``/``mode``
+    regardless of ``allow_overrides`` (the operator has full authority here).
+    ``repos`` is the per-job selection: unset = all declared, ``[]`` = none.
+    """
+
+    model_config = {"extra": "forbid"}
+    prompt: str = ""
+    thread_key: Optional[str] = None
+    deliverable: Optional[str] = None
+    mode: Optional[str] = None
+    repos: Optional[list[str]] = None
+
+
 class BodyIn(BaseModel):
     """A raw text body (CLAUDE.md context, a request template, a SKILL.md)."""
 

@@ -152,3 +152,37 @@ def test_config_masked_and_patch(admin):
     assert cfg["approval_secret"].startswith("••")
     admin.patch("/admin/config", json={"admin_remote": True})
     assert config.load_config().admin_remote is True
+
+
+# --- playground: ad-hoc run + admin stream ----------------------------------
+
+
+def test_run_instance_enqueues_job(admin):
+    _create(admin, name="playbot", deliverable="analysis")
+
+    r = admin.post("/admin/instances/playbot/run", json={"prompt": "hello"})
+    assert r.status_code == 202
+    body = r.json()
+    job_id = body["job_id"]
+    assert job_id
+    # Stream URL is under /admin/* so the console reaches it through the same channel.
+    assert body["stream_url"].endswith(f"/admin/jobs/{job_id}/stream")
+    # The job is persisted and queryable via the admin observability route.
+    assert admin.get(f"/admin/jobs/{job_id}").json()["id"] == job_id
+
+
+def test_run_honors_explicit_deliverable(admin):
+    # Instance defaults to pr; the operator forces analysis for a safe playground run.
+    _create(admin, name="runbot")  # deliverable="pr"
+    r = admin.post("/admin/instances/runbot/run", json={"prompt": "x", "deliverable": "analysis"})
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+    assert admin.get(f"/admin/jobs/{job_id}").json()["deliverable"] == "analysis"
+
+
+def test_run_unknown_instance_404(admin):
+    assert admin.post("/admin/instances/nope/run", json={"prompt": "x"}).status_code == 404
+
+
+def test_admin_job_stream_unknown_404(admin):
+    assert admin.get("/admin/jobs/does-not-exist/stream").status_code == 404

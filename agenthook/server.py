@@ -339,6 +339,24 @@ async def _handle_hook(app: FastAPI, name: str, request: Request, session_id: st
     if perr:
         return JSONResponse({"error": perr}, status_code=422)
 
+    job, err = _create_and_dispatch(app, inst, payload, deliverable, mode, idem=idem, session_id=session_id)
+    if err:
+        return JSONResponse({"error": err[1]}, status_code=err[0])
+
+    if request.query_params.get("wait") in ("1", "true", "yes"):
+        job = await _wait_for(job.id, timeout=float(request.query_params.get("timeout", 300)))
+    return JSONResponse(_ack(job, request), status_code=202)
+
+
+def _create_and_dispatch(app, inst, payload, deliverable, mode, *, idem=None, session_id=None):
+    """Create and enqueue a job on ``inst`` from an already-parsed payload.
+
+    Shared by the webhook handler and the admin run endpoint (playground). Returns
+    ``(job, None)`` on success or ``(None, (status_code, message))`` on a client error,
+    so each caller can shape it into its own response type.
+    """
+    name = inst.name
+
     # Validate the per-job repo selection against the declared pool (§2).
     if "repos" in payload:
         from .instances import InstanceError
@@ -346,7 +364,7 @@ async def _handle_hook(app: FastAPI, name: str, request: Request, session_id: st
         try:
             inst.select_repos(payload.get("repos"))
         except InstanceError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=422)
+            return None, (422, str(exc))
 
     # Session: explicit id, or find-or-create by thread_key.
     sess = None
@@ -354,7 +372,7 @@ async def _handle_hook(app: FastAPI, name: str, request: Request, session_id: st
     if session_id:
         sess = store.get_session(session_id)
         if not sess:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return None, (404, "session not found")
         thread_key = sess.thread_key
     elif thread_key:
         sess = store.find_or_create_session(name, thread_key)
@@ -372,10 +390,7 @@ async def _handle_hook(app: FastAPI, name: str, request: Request, session_id: st
     # Persist-before-ack (durability, §31).
     store.create_job(job)
     app.state.worker.notify()
-
-    if request.query_params.get("wait") in ("1", "true", "yes"):
-        job = await _wait_for(job.id, timeout=float(request.query_params.get("timeout", 300)))
-    return JSONResponse(_ack(job, request), status_code=202)
+    return job, None
 
 
 def _resolve_params(inst, payload):

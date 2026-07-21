@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from . import config as config_mod
 from . import instances, secrets, serde, store
@@ -29,6 +30,7 @@ from .api_models import (
     InstancePatch,
     LoginCodeIn,
     RepoIn,
+    RunIn,
 )
 from .instances import Instance, InstanceError
 
@@ -154,6 +156,39 @@ def resume_instance(name: str):
     _get(name)
     instances.set_paused(name, False)
     return _summary(_get(name))
+
+
+@router.post("/instances/{name}/run", status_code=202)
+def run_instance(name: str, body: RunIn, request: Request):
+    """Ad-hoc control-plane run against an instance (the console playground).
+
+    Enqueues a job exactly like ``/hook`` would, but authenticated by the admin
+    credential — no webhook secret needed, so it works regardless of the instance's
+    ``webhook_auth``. Follow the returned ``stream_url`` (``GET /admin/jobs/{id}/stream``)
+    for the live SSE feed. Honors an explicit ``deliverable``/``mode`` (operator authority).
+    """
+    from .models import Deliverable, Mode  # local import to avoid a load-time cycle
+    from .server import _create_and_dispatch
+
+    inst = _get(name)
+    payload = body.model_dump(exclude_unset=True)
+    try:
+        deliverable = Deliverable(payload.get("deliverable", inst.deliverable))
+        mode = Mode(payload.get("mode", inst.default_mode))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    job, err = _create_and_dispatch(request.app, inst, payload, deliverable, mode)
+    if err:
+        raise HTTPException(status_code=err[0], detail=err[1])
+
+    base = str(request.base_url).rstrip("/")
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "session_id": job.session_id,
+        "stream_url": f"{base}/admin/jobs/{job.id}/stream",
+    }
 
 
 # --- repos ------------------------------------------------------------------
@@ -454,6 +489,21 @@ def get_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return serde.job_to_dict(job)
+
+
+@router.get("/jobs/{job_id}/stream")
+def stream_job(job_id: str):
+    """Admin-authed SSE feed for a job (runner progress + live engine text deltas).
+
+    Mirrors the public ``/jobs/{id}/stream`` but under ``/admin/*`` so the Workspace
+    console can reach it through the same channel it already uses (the public ``/jobs``
+    routes are typically kept off the internet by the reverse proxy)."""
+    from .server import _log_stream  # local import to avoid a load-time cycle
+
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return StreamingResponse(_log_stream(job_id), media_type="text/event-stream")
 
 
 @router.get("/sessions")
