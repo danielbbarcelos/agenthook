@@ -184,6 +184,14 @@ curl "${A[@]}" -X PUT  localhost:8080/admin/instances/bugbot/context  -d '{"body
 
 # Skills (delivered as .claude/skills/<name>/SKILL.md at run time).
 curl "${A[@]}" -X PUT  localhost:8080/admin/instances/bugbot/skills/triage -d '{"body":"---\nname: triage\n---\n…"}'
+
+# Ad-hoc run from the control-plane (the console "playground"). No webhook secret
+# needed — the admin credential is the authority — so it works regardless of the
+# instance's webhook_auth. Then follow the returned stream_url for the live SSE feed.
+curl "${A[@]}" -X POST localhost:8080/admin/instances/bugbot/run \
+  -d '{"prompt":"summarize the open TODOs","deliverable":"analysis"}'
+# -> {"job_id":"…","status":"queued","stream_url":".../admin/jobs/<id>/stream"}
+curl "${A[@]}" -N       localhost:8080/admin/jobs/<id>/stream    # event: text … event: done
 ```
 
 **Guardrails are append-only.** The global operator guardrail is an inviolable floor — an

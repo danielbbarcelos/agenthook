@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.2.0
+
+Adds a control-plane way to run an instance ad-hoc and stream its output, so a
+remote console (e.g. the Workspace) can offer an interactive "playground" without
+holding the instance's webhook credential.
+
+### Management API
+- **`POST /admin/instances/<name>/run`** — enqueue a job against an instance from the
+  control-plane, authenticated by the admin credential (no webhook secret needed). Works
+  regardless of the instance's `webhook_auth` — the webhook schemes are ANDed, so bolting an
+  extra bearer onto a hook would break a coexisting `hmac` integration. Honors an explicit
+  `deliverable`/`mode` (operator authority) and returns `{job_id, status, session_id,
+  stream_url}`.
+- **`GET /admin/jobs/<id>/stream`** — the same live SSE feed as the public
+  `GET /jobs/<id>/stream` (`event: text` deltas, `event: done` to close) but under `/admin/*`,
+  so a console reaches it through the same channel it already uses for management (reverse
+  proxies typically keep the public `/jobs` routes off the internet).
+
+Internally, `/hook` and the new run endpoint share one job-creation path
+(`_create_and_dispatch`), so their behavior can't drift.
+
 ## v1.1.0-beta
 
 Beta release. Builds on v1.0.0 with live streaming and an interactive chat surface.
