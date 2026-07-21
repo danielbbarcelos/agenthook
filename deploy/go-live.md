@@ -123,3 +123,32 @@ AGENTHOOK_DOCKER_IT=1 pytest tests/test_egress.py::test_egress_fail_closed_live 
 
 **Remaining operator action:** create the read-only DB role and point instances
 at it; the anti-DROP guardrail is soft — the read-only grant is the hard control.
+
+## 8. Upgrade (in place — your data is preserved)
+
+All runtime state — `config.yaml`, `instances/`, `jobs.db`, `repos/` — lives under
+`AGENTHOOK_HOME` (`~/.agenthook`), which is **separate from the installed code**.
+Upgrading replaces code only; **it never overwrites your config or instances**, so you
+do **not** re-clone or re-run the first-time setup.
+
+From the source clone, as the `agenthook` user:
+
+```bash
+cd ~/agenthook            # your clone
+agenthook upgrade         # git pull -> rebuild panel -> rebuild wheel -> pipx --force -> restart
+```
+
+`agenthook upgrade` is a thin wrapper over [`upgrade.sh`](./upgrade.sh). Useful flags:
+
+```bash
+agenthook upgrade --ref v1.3.0     # pin/roll to a specific release tag (recommended in prod)
+agenthook upgrade --images         # ALSO rebuild the runner/egress Docker images (when they changed)
+agenthook upgrade --skip-web       # skip the panel rebuild (no npm on the host)
+agenthook upgrade --no-restart     # reinstall without bouncing the service
+```
+
+Equivalent without the CLI: `deploy/upgrade.sh [flags]`. Prereqs on the host: `git`,
+`python` + the `build` package (`pip install build`), `pipx` (falls back to `pip`), `npm`
+for the panel, and `docker` for `--images`. In-flight jobs are interrupted by the restart;
+drain first with `agenthook service stop` if that matters. Roll back by pinning the previous
+tag: `agenthook upgrade --ref <old>`.

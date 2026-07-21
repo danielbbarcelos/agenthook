@@ -151,8 +151,13 @@ agenthook context|auth|template|mcp|verify       guardrails   skill add|rm|list 
 agenthook serve [-d|--stop|--status|--logs]      install-service   service start|stop|status|logs
 agenthook run | dry-run | send [--replay]        enter   shell   login
 agenthook jobs list|show     sessions list       logs -f
-agenthook usage | audit [--export csv|json]
+agenthook usage | audit [--export csv|json]      upgrade [--ref TAG] [--images]
 ```
+
+**Upgrading** an installed deployment is in place — `agenthook upgrade` (from the source
+clone) pulls, rebuilds and reinstalls, then restarts the service. Your config and instances
+live under `~/.agenthook` and are never touched, so you don't re-clone or re-run setup. See
+[`deploy/go-live.md` §8](./deploy/go-live.md).
 
 The bare `agenthook` command (no subcommand) opens the **guided TUI** — an arrow-key menu
 over the same flows, with instance-first navigation, a job runner with inline plan approval,

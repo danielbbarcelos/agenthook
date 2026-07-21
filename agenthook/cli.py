@@ -575,6 +575,44 @@ WantedBy=default.target
         console.print(unit)
 
 
+@app.command("upgrade")
+def upgrade_cmd(
+    repo: Optional[str] = typer.Option(None, "--repo", help="path to the agenthook source clone (default: current dir)"),
+    ref: Optional[str] = typer.Option(None, "--ref", help="git ref to build (default: fast-forward the current branch)"),
+    with_images: bool = typer.Option(False, "--images", help="also rebuild the runner/egress Docker images"),
+    skip_web: bool = typer.Option(False, "--skip-web", help="skip rebuilding the web panel (needs npm)"),
+    no_restart: bool = typer.Option(False, "--no-restart", help="don't restart the systemd service afterwards"),
+):
+    """Upgrade this install in place — pull the latest source and reinstall.
+
+    A thin wrapper over ``deploy/upgrade.sh`` in the source clone. Your runtime state
+    (config.yaml, instances, jobs.db, repos) lives under ``AGENTHOOK_HOME`` (``~/.agenthook``)
+    and is NEVER touched — upgrading only replaces installed code. Run from the clone, or
+    point at it with ``--repo``. In prod, pin a release with ``--ref v1.3.0``.
+    """
+    import subprocess
+
+    root = Path(repo).expanduser() if repo else Path.cwd()
+    script = root / "deploy" / "upgrade.sh"
+    if not script.exists():
+        console.print(f"[red]could not find {script}[/]")
+        console.print("Run this from your agenthook source clone, or pass --repo /path/to/clone.")
+        raise typer.Exit(1)
+
+    cmd = ["bash", str(script)]
+    if ref:
+        cmd += ["--ref", ref]
+    if with_images:
+        cmd.append("--images")
+    if skip_web:
+        cmd.append("--skip-web")
+    if no_restart:
+        cmd.append("--no-restart")
+
+    console.print(f"[bold]upgrading from {root}[/] — state in {paths.home()} is preserved")
+    raise typer.Exit(subprocess.run(cmd, cwd=str(root)).returncode)
+
+
 @service_app.command("start")
 def service_start():
     _systemctl("start")

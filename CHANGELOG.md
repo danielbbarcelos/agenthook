@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0
+
+### Operations
+- **`agenthook upgrade`** — in-place upgrade of an installed deployment: pulls the latest
+  source, rebuilds the web panel + wheel, reinstalls (`pipx --force`, falls back to `pip`),
+  and restarts the systemd service. Flags: `--ref <tag>` (pin/roll to a release — recommended
+  in prod), `--images` (also rebuild the runner/egress Docker images), `--skip-web`,
+  `--no-restart`. A thin wrapper over the new [`deploy/upgrade.sh`](./deploy/upgrade.sh).
+- **Your data is never touched by an upgrade.** All runtime state (`config.yaml`, `instances/`,
+  `jobs.db`, `repos/`) lives under `AGENTHOOK_HOME` (`~/.agenthook`), separate from the installed
+  code — so upgrades don't overwrite config or instances, and you never re-clone or re-run setup.
+  Documented in [`deploy/go-live.md` §8](./deploy/go-live.md).
+
 ## v1.2.0
 
 Adds a control-plane way to run an instance ad-hoc and stream its output, so a
