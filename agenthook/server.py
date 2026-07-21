@@ -591,16 +591,26 @@ async def _log_stream(job_id: str):
                 out.append(_sse("text", delta))
         return out
 
+    silent = 0
     for _ in range(1200):  # ~10 min cap
         # Check terminal *before* draining so the final read happens after the
         # job stopped writing — otherwise last deltas could slip past us.
         job = store.get_job(job_id)
         done = job is not None and job.status.terminal
+        produced = False
         for msg in drain():
+            produced = True
             yield msg
         if done:
             yield _sse("done", job.status.value)
             return
+        # Keepalive during silence so intermediary proxies and client read-timeouts
+        # don't mistake a thinking pause for a dead connection and cut the feed. An
+        # SSE comment line (`: …`) is ignored by clients but keeps bytes flowing.
+        silent = 0 if produced else silent + 1
+        if silent >= 30:  # ~15s
+            silent = 0
+            yield ": keepalive\n\n"
         await asyncio.sleep(0.5)
 
 

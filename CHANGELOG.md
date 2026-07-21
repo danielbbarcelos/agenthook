@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.2
+
+### Streaming
+- **SSE keepalive** — `GET /jobs/<id>/stream` (and its `/admin/*` mirror) now emit an SSE
+  comment (`: keepalive`) after ~15s of silence, so a thinking pause is never mistaken for a
+  dead connection. Keeps bytes flowing for intermediary proxies and consumers that (correctly)
+  apply a finite read timeout, so a long silent turn no longer cuts the feed short. Comments are
+  ignored by clients — no behavior change for consumers.
+
 ## v1.3.1
 
 ### Fixes
