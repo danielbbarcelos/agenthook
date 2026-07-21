@@ -34,6 +34,13 @@ done
 cd "$(dirname "$0")/.."   # repo root
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
+# Resolve a Python interpreter (some hosts ship only `python3`, no `python`).
+PY="$(command -v python3 || command -v python || true)"
+if [ -z "$PY" ]; then
+  echo "error: no python interpreter found (need python3 or python) — install Python 3" >&2
+  exit 1
+fi
+
 say "Updating source"
 git fetch --tags origin
 if [ -n "$REF" ]; then
@@ -53,13 +60,17 @@ if [ "$SKIP_WEB" -eq 0 ]; then
 fi
 
 say "Building & installing the wheel"
+if ! "$PY" -c "import build" >/dev/null 2>&1; then
+  echo "error: the 'build' package is missing — install it with: $PY -m pip install build" >&2
+  exit 1
+fi
 rm -rf dist
-python -m build
+"$PY" -m build
 WHEEL="$(ls -t dist/agenthook-*.whl | head -1)"
 if command -v pipx >/dev/null 2>&1; then
   pipx install --force "$WHEEL"
 else
-  python -m pip install --force-reinstall "$WHEEL"
+  "$PY" -m pip install --force-reinstall "$WHEEL"
 fi
 echo "installed: $(basename "$WHEEL")"
 

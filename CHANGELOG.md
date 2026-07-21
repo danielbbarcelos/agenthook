@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.1
+
+### Fixes
+- **`deploy/upgrade.sh` / `agenthook upgrade`** — resolve the Python interpreter as
+  `python3` (falling back to `python`) instead of hard-coding `python`, which is absent on
+  hosts that only ship `python3` (the build step failed with `python: command not found`).
+  Also preflight-checks the `build` package and prints an actionable hint if it's missing.
+
 ## v1.3.0
 
 ### Operations
