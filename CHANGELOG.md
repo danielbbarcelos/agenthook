@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.0
+
+### Admin API
+- **`DELETE /admin/sessions/<id>`** — remove a chat session and everything under it (its jobs,
+  their audit rows and log files, and the persisted engine session volume), reusing the existing
+  `store.delete_session`. Returns `204` on success, `404` when the session doesn't exist. Lets the
+  Workspace console's playground offer a real "delete session" alongside the read-only
+  `GET /admin/sessions`. Read-only session/job listing is unchanged.
+
 ## v1.3.2
 
 ### Streaming

@@ -511,6 +511,17 @@ def list_sessions(instance: Optional[str] = None):
     return [serde.session_to_dict(s) for s in store.list_sessions(instance=instance)]
 
 
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_session(session_id: str):
+    """Delete a chat session and everything under it — its jobs, their audit rows
+    and log files, and the persisted engine session volume. Used by the console
+    playground to let an operator remove a manual chat."""
+    if store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    store.delete_session(session_id)
+    return Response(status_code=204)
+
+
 @router.get("/usage")
 def usage(instance: Optional[str] = None, requester: Optional[str] = None, since: Optional[float] = None):
     return store.usage_summary(instance=instance, requester=requester, since=since)
